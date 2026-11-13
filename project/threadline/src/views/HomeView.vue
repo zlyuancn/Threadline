@@ -278,6 +278,11 @@ async function toggleTunnel(row: { id: string; name: string; enabled: boolean },
       '操作超时：核心没有响应',
     );
     if (affected === null) {
+      // 导入的连接没有密码：这是「还没配置完」，不是故障，别用红色错误吓人
+      if (tunnels.lastError.includes('还没填密码')) {
+        ElMessage.warning('这条隧道还没填密码：先点「编辑」填一次密码或私钥，再打开');
+        return;
+      }
       if (tunnels.lastError.includes('待确认')) {
         // 首次连接必须先确认主机密钥：开关保持"开"，指纹与按钮显示在状态列。
         ElMessage.warning('首次连接需要确认主机密钥：指纹已显示在状态列，点「信任并记录」即可');

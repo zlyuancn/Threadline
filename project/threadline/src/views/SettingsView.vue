@@ -2,6 +2,8 @@
 import { nextTick, onUnmounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { gatewayApi, hostsApi } from '../api';
+import ProfileExportDialog from '../components/ProfileExportDialog.vue';
+import ProfileImportDialog from '../components/ProfileImportDialog.vue';
 import {
   exportGatewayCa,
   gatewayCaTrust,
@@ -218,6 +220,9 @@ watch(
 
 const orderOpen = ref(false);
 const orderSaving = ref(false);
+/** 导入导出各自一个弹窗：两个流程的确认逻辑完全不同，合在一个里会很乱。 */
+const exportOpen = ref(false);
+const importOpen = ref(false);
 /** 弹窗里的本地顺序（id 数组）：拖动时改它，点保存才写回。 */
 const order = ref<string[]>([]);
 const listRef = ref<HTMLElement | null>(null);
@@ -620,12 +625,26 @@ async function toggle(enabled: boolean) {
   </div>
 
   <div class="panel">
-    <h3 class="panel-title">隧道顺序</h3>
+    <h3 class="panel-title">隧道管理</h3>
     <div class="service-row">
       <span class="hint" style="margin: 0">侧栏与切换条里的先后次序</span>
       <button class="btn" :disabled="!servers.servers.length" @click="openOrder">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h10M3 8h10M3 11h10"/></svg>
         调整顺序
+      </button>
+    </div>
+    <div class="service-row">
+      <span class="hint" style="margin: 0">导出可分享的配置包（不含密码/私钥）</span>
+      <button class="btn" :disabled="!servers.servers.length" @click="exportOpen = true">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v8M5 8l3 3 3-3"/><path d="M3.5 13h9"/></svg>
+        导出配置
+      </button>
+    </div>
+    <div class="service-row">
+      <span class="hint" style="margin: 0">从别人的配置包导入（导入后需自填密码）</span>
+      <button class="btn" @click="importOpen = true">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 10V2M5 5l3-3 3 3"/><path d="M3.5 13h9"/></svg>
+        导入配置
       </button>
     </div>
   </div>
@@ -793,6 +812,9 @@ async function toggle(enabled: boolean) {
       它和上面的「开机自启」是两件事：这里只管当前这一次。
     </p>
   </div>
+
+  <ProfileExportDialog v-model="exportOpen" />
+  <ProfileImportDialog v-model="importOpen" />
 
   <div class="panel">
     <h3 class="panel-title">开机自启</h3>

@@ -2151,6 +2151,167 @@ code {
   background: transparent;
 }
 
+/* ───────────── 配置导入导出 ───────────── */
+
+/* 勾选树：连接一行、转发缩进一行；行内右侧放数量/协议徽标 */
+.pf-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 10px 0 8px;
+}
+
+.pf-search {
+  flex: 1;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--tint);
+  color: inherit;
+  font: inherit;
+}
+
+.pf-search:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--mint) 45%, var(--line));
+}
+
+.pf-tree {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pf-node {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.pf-node:last-child {
+  border-bottom: none;
+}
+
+.pf-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+}
+
+.pf-sub {
+  margin: 0;
+  padding: 0 0 0 22px;
+  list-style: none;
+}
+
+.pf-sub .pf-line {
+  min-height: 24px;
+}
+
+.pf-name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pf-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.pf-badge {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--tint-strong);
+  color: var(--text-2);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.pf-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+/* 导入预览：每条的目的地、动作、冲突原因 */
+.pf-review {
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pf-review-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.pf-review-row:last-child {
+  border-bottom: none;
+}
+
+.pf-review-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pf-review-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pf-reason {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--warn);
+}
+
+.pf-port {
+  width: 92px;
+}
+
+.pf-sub-review {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  padding: 0 0 0 14px;
+  list-style: none;
+}
+
+.pf-sub-review .pf-review-row {
+  border-bottom: none;
+  padding: 4px 0;
+}
+
+/* 侧栏里的「待填密码」：导入的连接缺登录材料，用暖色小标签提示，不抢状态点的位置 */
+.conn-badge {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
+  color: var(--warn);
+  font-size: 10px;
+  font-weight: 600;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+
 .el-descriptions__cell,
 .el-descriptions__label,
 .el-descriptions__content {

@@ -566,6 +566,12 @@ onUnmounted(() => {
             <span class="conn-name">
               {{ server.name }}
               <span class="dot" :class="tunnelDot(server.id)" />
+              <span
+                v-if="server.needs_credential"
+                class="conn-badge"
+                title="这条连接来自配置包，不含密码：编辑里填一次密码或私钥即可"
+                >待填密码</span
+              >
             </span>
             <span class="conn-host mono">{{ server.username }}@{{ server.host }}</span>
             <span v-if="speedOf(server.id)" class="conn-speed">
