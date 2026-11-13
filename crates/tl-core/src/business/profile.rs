@@ -858,7 +858,9 @@ mod tests {
         assert_eq!(result.created_servers, 0);
         assert_eq!(result.created_forwards, 1, "改名不该让转发无处可去");
         assert_eq!(
-            f.tunnels.list().expect("list").items[0].definition.server_id,
+            f.tunnels.list().expect("list").items[0]
+                .definition
+                .server_id,
             local.id
         );
     }
