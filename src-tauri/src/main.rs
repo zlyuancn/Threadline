@@ -1116,7 +1116,10 @@ fn system_proxy() -> Option<String> {
     let host = if server.contains('=') {
         server
             .split(';')
-            .find_map(|part| part.strip_prefix("https=").or_else(|| part.strip_prefix("http=")))
+            .find_map(|part| {
+                part.strip_prefix("https=")
+                    .or_else(|| part.strip_prefix("http="))
+            })
             .unwrap_or_default()
     } else {
         server.as_str()
@@ -1237,7 +1240,9 @@ async fn download_update(app: AppHandle, url: String, version: String) -> Result
         let mut buf = vec![0u8; 64 * 1024];
         let mut written: u64 = 0;
         loop {
-            let n = reader.read(&mut buf).map_err(|e| format!("读取失败：{e}"))?;
+            let n = reader
+                .read(&mut buf)
+                .map_err(|e| format!("读取失败：{e}"))?;
             if n == 0 {
                 break;
             }
