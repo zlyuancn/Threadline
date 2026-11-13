@@ -969,7 +969,10 @@ struct ProfilePackage {
 /// 不能用 WebView 的 `<a download>`：那条路在 Tauri 里是静默下载，文件落进默认下载
 /// 目录，用户既看不到落点也没有选择余地——分享配置这件事必须让人知道存哪。
 #[tauri::command]
-async fn save_profile_package(bytes_base64: String, default_name: String) -> Result<Option<String>, String> {
+async fn save_profile_package(
+    bytes_base64: String,
+    default_name: String,
+) -> Result<Option<String>, String> {
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(bytes_base64.as_bytes())

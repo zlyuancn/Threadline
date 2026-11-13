@@ -30,6 +30,9 @@ import HomeView from './views/HomeView.vue';
 import LogsView from './views/LogsView.vue';
 import SettingsView from './views/SettingsView.vue';
 
+// 由 vite 的 define 注入（package.json 的 version）：版本号只有一处真相
+const appVersion = __APP_VERSION__;
+
 type Tab = 'apps' | 'all' | 'forwards' | 'logs' | 'settings';
 
 const tab = ref<Tab>('apps');
@@ -609,7 +612,7 @@ onUnmounted(() => {
         >
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13 2.5V5h-2.5"/></svg>
         </button>
-        <span class="rail-ver">v0.1.0 · 仅本机</span>
+        <span class="rail-ver">v{{ appVersion }} · 仅本机</span>
         <span v-if="totalRate" class="rail-rate" title="所有隧道的合计速率">
           <span class="rate-up">↑ {{ totalRate.up }}</span>
           <span class="rate-down">↓ {{ totalRate.down }}</span>

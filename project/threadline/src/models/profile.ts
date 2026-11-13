@@ -137,7 +137,8 @@ export function buildProfile(opts: BuildOptions): BuiltPackage {
       kind: PROFILE_KIND,
       version: PROFILE_VERSION,
       exported_at: (opts.now ?? new Date()).toISOString(),
-      app_version: opts.appVersion ?? '0.1.0',
+      app_version:
+        opts.appVersion ?? (typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '0.0.0'),
       servers,
       ...(opts.preferences ? { preferences: opts.preferences } : {}),
     },
