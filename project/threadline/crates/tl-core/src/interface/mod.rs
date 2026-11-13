@@ -197,6 +197,14 @@ pub fn router(state: Arc<AppState>) -> Router {
             &format!("{API_PREFIX}/gateway/ca/trust-result"),
             post(gateway_trust_result),
         )
+        .route(
+            &format!("{API_PREFIX}/profile/plan"),
+            post(profile_plan),
+        )
+        .route(
+            &format!("{API_PREFIX}/profile/import"),
+            post(profile_import),
+        )
         .route(&format!("{API_PREFIX}/shutdown"), post(shutdown))
         .route(&format!("{API_PREFIX}/logs"), get(logs))
         .layer(axum::middleware::from_fn_with_state(
@@ -745,6 +753,30 @@ async fn shutdown(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Shutd
             retry_after_ms: 300,
         }),
     )
+}
+
+/// 导入预判：只读，不改配置。界面拿它渲染「新建/跳过/覆盖」。
+async fn profile_plan(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<tl_protocol::ProfilePlanRequest>,
+) -> Result<Json<tl_protocol::ProfilePlan>, ApiFailure> {
+    state
+        .services
+        .profile_plan(req)
+        .map(Json)
+        .map_err(Into::into)
+}
+
+/// 按用户确认的结果逐条落地。部分失败不回滚已成功的条目。
+async fn profile_import(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<tl_protocol::ProfileImportRequest>,
+) -> Result<Json<tl_protocol::ProfileImportResult>, ApiFailure> {
+    state
+        .services
+        .import_profile(req)
+        .map(Json)
+        .map_err(Into::into)
 }
 
 #[derive(Debug, Deserialize)]

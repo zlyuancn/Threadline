@@ -6,6 +6,7 @@
 
 pub mod gateway;
 pub mod hosts_sync;
+pub mod profile;
 pub mod tunnel_runner;
 
 use std::path::{Path, PathBuf};
@@ -465,6 +466,28 @@ impl Services {
 
     pub async fn stop_tunnel(&self, id: &str) -> Result<()> {
         self.runner.stop(id).await
+    }
+
+    /// 导入预判：只读，不改任何配置。
+    pub fn profile_plan(
+        &self,
+        req: tl_protocol::ProfilePlanRequest,
+    ) -> Result<tl_protocol::ProfilePlan> {
+        profile::plan(&self.servers, &self.tunnels, req)
+    }
+
+    /// 按用户确认的结果逐条落地。
+    ///
+    /// 含域名的条目需要重新写 hosts：这里尽力同步一次，失败只留待提权标记，
+    /// 不阻断导入（否则用户会以为是导入失败）。
+    pub fn import_profile(
+        &self,
+        req: tl_protocol::ProfileImportRequest,
+    ) -> Result<tl_protocol::ProfileImportResult> {
+        let result = profile::import(&self.servers, &self.tunnels, req)?;
+        self.notify_changed();
+        self.sync_hosts_quietly();
+        Ok(result)
     }
 }
 
