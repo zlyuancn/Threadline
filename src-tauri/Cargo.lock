@@ -3923,7 +3923,7 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tl-agent"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64 0.22.1",
  "rfd",
@@ -3942,7 +3942,7 @@ dependencies = [
 
 [[package]]
 name = "tl-protocol"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -3950,7 +3950,7 @@ dependencies = [
 
 [[package]]
 name = "tl-wake"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "serde_json",
