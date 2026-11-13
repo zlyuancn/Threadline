@@ -1,0 +1,16 @@
+[package]
+name = "tl-wake"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+publish = false
+description = "Threadline 启动编排：探测核心并按注册层拉起（被助手调用，不再单独出可执行文件）"
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tl-protocol.workspace = true
+serde_json.workspace = true

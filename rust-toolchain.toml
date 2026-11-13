@@ -1,0 +1,8 @@
+[toolchain]
+# Track stable rather than pinning a version number: a pinned channel that is not installed
+# makes rustup try to download it, which stalls offline / behind a proxy.
+# Trade-off: a new Rust release can add a lint that `-D warnings` trips on. When that
+# happens, fix or allow the lint in the same commit that bumps the toolchain -- do not
+# loosen the gate.
+channel = "stable"
+components = ["rustfmt", "clippy"]

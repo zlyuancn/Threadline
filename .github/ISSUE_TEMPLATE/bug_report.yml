@@ -1,0 +1,59 @@
+name: Bug 报告
+description: 报告一个可复现的缺陷
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        安全问题请**不要**发公开 Issue，走 [SECURITY.md](https://github.com/zlyuancn/Threadline/blob/main/SECURITY.md) 的私密通道。
+
+        提交前请确认：这是**单用户机器**上的问题，不是「多人共用一台电脑」导致的（后者属已知限制）。
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: Release 页的版本号，或 commit hash
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      placeholder: Windows 11 23H2 (22631)
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从「打开程序」开始，一步步写
+      placeholder: |
+        1. 新建隧道 dev-a
+        2. 新建转发 127.0.0.1:8080 → remote:80
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 有报错原文就贴原文；状态异常说清状态灯与提示文字
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 截图
+      description: |
+        `%PUBLIC%\Threadline\agent.log`（如有）、界面截图。
+        **贴之前删掉主机地址、域名、用户名。**
+      render: text
+    validations:
+      required: false

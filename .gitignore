@@ -1,0 +1,21 @@
+/target
+/src-tauri/target
+/src-tauri/gen
+/src-tauri/binaries
+node_modules/
+dist/
+*.log
+*.exe
+.DS_Store
+/tools/msocheck/node_modules
+
+# 打包产物（scripts/collect-out.ps1 生成）
+/out/
+
+# 本地产物里会出现 PEM 私钥材料（本地 CA 根私钥），别让 git add . 顺手收进来
+*.pem
+*.key
+*.pfx
+*.p12
+.env
+.env.*

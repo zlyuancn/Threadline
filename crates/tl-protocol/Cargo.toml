@@ -1,0 +1,12 @@
+[package]
+name = "tl-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+publish = false
+description = "Threadline 控制 API 契约：DTO 与客户端（Core / Agent / Wake 共用）"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
