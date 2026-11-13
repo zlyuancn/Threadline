@@ -229,6 +229,9 @@ fn show_window(app: &AppHandle) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+        // 托盘、热键、再次双击启动都走这里。每次唤起都回默认页：
+        // 用户「打开」应用时期望看到的是应用列表，而不是上次停留的设置页。
+        let _ = app.emit("window:shown", ());
     }
 }
 

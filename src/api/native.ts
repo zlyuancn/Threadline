@@ -398,6 +398,19 @@ export async function installUpdate(path: string): Promise<void> {
 }
 
 /**
+ * 订阅「窗口被显示」：托盘点击、全局热键、再次双击启动都会触发。
+ *
+ * 常驻托盘的应用每次唤起都该回到默认页，界面收到后重置当前 tab。
+ */
+export async function onWindowShown(handler: () => void): Promise<() => void> {
+  if (!isTauri()) {
+    return () => undefined;
+  }
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen('window:shown', () => handler());
+}
+
+/**
  * 订阅下载进度（已下载字节 / 总字节），返回取消订阅函数。
  *
  * 事件名与 Rust 侧 `app.emit("update:progress", (written, total))` 对齐。

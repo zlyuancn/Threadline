@@ -17,6 +17,7 @@ import {
   getDataDirStatus,
   isTauri,
   onCoreStateChange,
+  onWindowShown,
   refreshBootstrap,
   startCore,
   syncHostsElevated,
@@ -60,6 +61,7 @@ const POLL_HIDDEN_MS = 5000;
 let timer: number | undefined;
 let delay = POLL_ONLINE_MS;
 let unlisten: (() => void) | undefined;
+let unlistenShown: (() => void) | undefined;
 
 const connectionTag = computed(() => {
   if (runtime.connection === 'online') return { type: 'success' as const, text: '核心在线' };
@@ -510,6 +512,10 @@ onMounted(async () => {
     } else {
       runtime.markOffline('核心未运行');
     }
+    // 每次被唤起（托盘、热键、再次双击启动）都回到「应用」页
+    unlistenShown = await onWindowShown(() => {
+      tab.value = 'apps';
+    });
     unlisten = await onCoreStateChange(async (alive) => {
       if (alive) {
         runtime.markOnline();
@@ -552,6 +558,7 @@ onUnmounted(() => {
   eventStream?.close();
   eventStream = null;
   unlisten?.();
+  unlistenShown?.();
 });
 </script>
 
