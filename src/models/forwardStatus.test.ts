@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { forwardBlockedReason } from './forwardStatus';
 
-const disconnected = { id: 's1', name: 'dev-a', enabled: false };
-const connected = { id: 's1', name: 'dev-a', enabled: true };
+const disconnected = { id: 's1', name: 'dev-a', enabled: false, needs_credential: false };
+const connected = { id: 's1', name: 'dev-a', enabled: true, needs_credential: false };
+const noCredential = { id: 's1', name: 'dev-a', enabled: false, needs_credential: true };
 
 describe('forwardBlockedReason', () => {
   it('运行中不说话', () => {
@@ -17,6 +18,14 @@ describe('forwardBlockedReason', () => {
         disconnected,
       ),
     ).toBe('连接「dev-a」已断开：转发挂在它上面，先打开上面的连接开关');
+  });
+
+  it('导入来的连接缺凭据时，先说补密码，而不是说连接断开', () => {
+    // 导入只带主机和用户名，密码不落包。此时用户点启动必然失败，
+    // 界面上「已连接 + 已停止 + 连接已断开」三句话互相打脸。
+    expect(
+      forwardBlockedReason({ state: 'stopped', last_error: '这条隧道还没填密码，无法连接' }, noCredential),
+    ).toBe('连接「dev-a」还没填密码：点「编辑」补上就能启动');
   });
 
   it('连接正常时，回落到上次错误', () => {

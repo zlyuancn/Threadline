@@ -11,17 +11,19 @@ export interface ForwardStatusLike {
   last_error: string | null;
 }
 
-/** 转发挂在**连接**上：连接没启用时，转发一律起不来。 */
+/** 转发挂在**连接**上：连接不可用，转发一律起不来。 */
 export interface ServerLike {
   id: string;
   name: string;
   enabled: boolean;
+  /** 导入来的连接没有密码/私钥，需要用户补一次。 */
+  needs_credential?: boolean;
 }
 
 /**
  * 返回一句人能读懂的原因；没有可解释的阻塞点时返回空串。
  *
- * 优先级：**当前**的阻塞点（连接没启用）＞ 上次错误。
+ * 优先级：**当前的阻塞点**（缺凭据 ＞ 连接未启用）＞ 上次错误。
  * 否则会把一条过期错误当成现在的原因——那是另一种撒谎。
  */
 export function forwardBlockedReason(
@@ -30,6 +32,9 @@ export function forwardBlockedReason(
 ): string {
   if (status.state === 'running') {
     return '';
+  }
+  if (server?.needs_credential) {
+    return `连接「${server.name}」还没填密码：点「编辑」补上就能启动`;
   }
   if (server && !server.enabled) {
     return `连接「${server.name}」已断开：转发挂在它上面，先打开上面的连接开关`;

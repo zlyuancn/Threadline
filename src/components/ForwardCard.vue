@@ -23,7 +23,7 @@ import type { TunnelView } from '../api/types';
 const props = defineProps<{
   view: TunnelView;
   /** 这条转发所属隧道；「所有转发」页需要它来算 blockedReason。 */
-  server?: { id: string; name: string; enabled: boolean } | null;
+  server?: { id: string; name: string; enabled: boolean; needs_credential?: boolean } | null;
   busyKey: string | null;
 }>();
 

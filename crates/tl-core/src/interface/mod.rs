@@ -457,6 +457,10 @@ async fn remove_server(
             }
         }
     }
+    // 先收运行时再删配置：否则 SSH 会话会留在内存里，界面继续显示「已连接」，
+    // 而这条连接其实已经没了（同名连接再导入时还会继承这个假连接）。
+    // 这里是尽力而为：断会话失败也不该让用户删不掉配置。
+    let _ = state.services.forget_server(&id).await;
     state.services.servers.remove(&id)?;
     Ok(StatusCode::NO_CONTENT)
 }

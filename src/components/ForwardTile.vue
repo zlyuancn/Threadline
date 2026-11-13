@@ -25,7 +25,7 @@ import type { TunnelView } from '../api/types';
 const props = defineProps<{
   view: TunnelView;
   /** 这条转发所属隧道；用来算 blockedReason 与提示。 */
-  server?: { id: string; name: string; enabled: boolean } | null;
+  server?: { id: string; name: string; enabled: boolean; needs_credential?: boolean } | null;
   busyKey: string | null;
 }>();
 

@@ -500,6 +500,17 @@ impl Services {
         Ok(())
     }
 
+    /// 删除连接前把运行时收拾干净：停守护、断开会话。
+    ///
+    /// 只删配置会留下孤儿 SSH 会话：界面顶部继续显示「已连接」、流量还在跳，
+    /// 而库里这条连接已经没了（或导入后被同名新连接顶替，凭据是空的）。
+    /// 之后再「启动」转发也解释不通——会话在、`enabled` 却是 false。
+    pub async fn forget_server(&self, server_id: &str) -> Result<()> {
+        self.runner.stop_keeper(server_id);
+        self.runner.disconnect_session(server_id).await?;
+        Ok(())
+    }
+
     /// 删掉一条连接下的全部转发。
     ///
     /// 界面删连接时曾经是「前端 for 循环逐条删」：40 条转发就是 40 次请求、
