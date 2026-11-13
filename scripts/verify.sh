@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# 工作区本机门禁：依次跑各项目的门禁（当前只有 threadline），全绿才算通过。
+# Threadline 本机门禁包装：在 WSL / Git Bash 里一条命令跑完（实际逻辑在 verify.ps1，因为 cargo/pnpm 是 Windows 侧工具）。
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "== project/threadline =="
-bash "$HERE/../project/threadline/scripts/verify.sh"
+if command -v wslpath >/dev/null 2>&1; then
+  PS_PATH="$(wslpath -w "$HERE/verify.ps1")"
+else
+  PS_PATH="$HERE/verify.ps1"
+fi
 
-echo
-echo "本机门禁全绿。批次收口仍以环境门禁（真实 SSH 服务器端到端转发）为准。"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PS_PATH"

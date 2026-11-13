@@ -1,7 +1,24 @@
-# 单仓：工作区文档 + project/threadline 一起进版本库。
-# 构建产物与依赖由 project/threadline/.gitignore 负责排除。
-.DS_Store
-*.log
-
-# 在仓库根直接跑 pnpm/vitest/npx 会在这里留下缓存
+/target
+/src-tauri/target
+/src-tauri/gen
+/src-tauri/binaries
 node_modules/
+dist/
+*.log
+*.exe
+.DS_Store
+/tools/msocheck/node_modules
+
+# 打包产物（scripts/collect-out.ps1 生成）
+/out/
+
+# 本地产物里会出现 PEM 私钥材料（本地 CA 根私钥），别让 git add . 顺手收进来
+*.pem
+*.key
+*.pfx
+*.p12
+.env
+.env.*
+
+# 本地构建的发布产物（不入库）
+/dist-release/
