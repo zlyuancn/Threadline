@@ -500,6 +500,29 @@ impl Services {
         Ok(())
     }
 
+    /// 删掉一条连接下的全部转发。
+    ///
+    /// 界面删连接时曾经是「前端 for 循环逐条删」：40 条转发就是 40 次请求、
+    /// 40 次文件写、40 次 hosts 同步。这里一次做完，只写一次文件、同步一次。
+    pub async fn remove_forwards_of_server(&self, server_id: &str) -> Result<usize> {
+        let ids: Vec<String> = self
+            .tunnels
+            .list()?
+            .items
+            .into_iter()
+            .filter(|view| view.definition.server_id == server_id)
+            .map(|view| view.definition.id)
+            .collect();
+        for id in &ids {
+            let _ = self.runner.stop(id).await;
+        }
+        let removed = self.tunnels.remove_for_server(server_id)?;
+        if !removed.is_empty() {
+            self.sync_hosts_quietly();
+        }
+        Ok(removed.len())
+    }
+
     pub async fn start_tunnel(self: &Arc<Self>, id: &str) -> Result<()> {
         self.runner.start(id).await
     }

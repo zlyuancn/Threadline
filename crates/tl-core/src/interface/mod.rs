@@ -412,34 +412,49 @@ async fn patch_server(
     Ok(Json(server))
 }
 
+#[derive(Deserialize, Default)]
+struct RemoveServerQuery {
+    /// 连同它下面的端口转发一起删。
+    ///
+    /// 界面原先自己 for 循环逐条删：一条连接挂 40 条转发就是 40 次请求、40 次
+    /// 写盘、40 次 hosts 同步。交给服务端一次做完，只写一次。
+    #[serde(default)]
+    cascade: bool,
+}
+
 async fn remove_server(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
+    Query(query): Query<RemoveServerQuery>,
 ) -> Result<StatusCode, ApiFailure> {
-    // 规则归 tunnel 模型：它回答"这个服务器还被哪些转发引用"。
-    match state.services.tunnels.can_remove_server(&id)? {
-        crate::models::RemoveDecision::Allowed => {}
-        crate::models::RemoveDecision::Blocked { referenced_by } => {
-            // 报错是给用户看的：说清"还剩几条、叫什么"，不要甩内部 id。
-            let names: Vec<String> = state
-                .services
-                .tunnels
-                .list()?
-                .items
-                .into_iter()
-                .filter(|view| view.definition.server_id == id)
-                .map(|view| view.definition.name)
-                .collect();
-            let labels = if names.is_empty() {
-                referenced_by.join("、")
-            } else {
-                names.join("、")
-            };
-            let count = names.len().max(referenced_by.len());
-            return Err(ApiFailure::conflict(
-                "server_in_use",
-                format!("这条隧道下还有 {count} 条端口转发（{labels}），请先删除它们"),
-            ));
+    if query.cascade {
+        state.services.remove_forwards_of_server(&id).await?;
+    } else {
+        // 规则归 tunnel 模型：它回答"这个服务器还被哪些转发引用"。
+        match state.services.tunnels.can_remove_server(&id)? {
+            crate::models::RemoveDecision::Allowed => {}
+            crate::models::RemoveDecision::Blocked { referenced_by } => {
+                // 报错是给用户看的：说清"还剩几条、叫什么"，不要甩内部 id。
+                let names: Vec<String> = state
+                    .services
+                    .tunnels
+                    .list()?
+                    .items
+                    .into_iter()
+                    .filter(|view| view.definition.server_id == id)
+                    .map(|view| view.definition.name)
+                    .collect();
+                let labels = if names.is_empty() {
+                    referenced_by.join("、")
+                } else {
+                    names.join("、")
+                };
+                let count = names.len().max(referenced_by.len());
+                return Err(ApiFailure::conflict(
+                    "server_in_use",
+                    format!("这条隧道下还有 {count} 条端口转发（{labels}），请先删除它们"),
+                ));
+            }
         }
     }
     state.services.servers.remove(&id)?;

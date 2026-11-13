@@ -37,7 +37,9 @@ export const serversApi = {
   list: () => http.get<ServerList>('/servers'),
   create: (req: CreateServerRequest) => http.post<ServerDto>('/servers', req),
   patch: (id: string, req: PatchServerRequest) => http.patch<ServerDto>(`/servers/${id}`, req),
-  remove: (id: string) => http.del<void>(`/servers/${id}`),
+  /** `cascade` 时连同它下面的端口转发一起删（服务端一次写完，不逐条删）。 */
+  remove: (id: string, cascade = false) =>
+    http.del<void>(`/servers/${id}${cascade ? '?cascade=true' : ''}`),
   reorder: (ids: string[]) => http.put<void>('/servers/order', { ids }),
   hostKey: (id: string) => http.get<HostKeyView>(`/servers/${id}/hostkey`),
   probe: (id: string) => http.post<ProbeServerReport>(`/servers/${id}/probe`),

@@ -130,9 +130,15 @@ export const useServersStore = defineStore('servers', () => {
     });
   }
 
-  async function removeServer(id: string): Promise<boolean> {
+  /**
+   * 删除连接。
+   *
+   * `cascade` 交给服务端一次做完：以前是前端 for 循环逐条删转发，40 条转发
+   * 就会打 40 次请求、写 40 次盘、同步 40 次 hosts。
+   */
+  async function removeServer(id: string, cascade = false): Promise<boolean> {
     return guard(async () => {
-      await serversApi.remove(id);
+      await serversApi.remove(id, cascade);
     });
   }
 

@@ -439,6 +439,40 @@ impl TunnelStore {
         Ok(())
     }
 
+    /// 一次删掉挂在某条连接下的全部转发，返回删掉的 id。
+    ///
+    /// 单条 `remove` 每次都 load + save，还要释放地址登记；删一条连接下 40 条
+    /// 转发就是 40 次文件写、40 次变更广播、40 次 hosts 同步。批量删除只写一次。
+    pub fn remove_for_server(&self, server_id: &str) -> Result<Vec<String>> {
+        let mut file = self.load()?;
+        let mut removed: Vec<String> = Vec::new();
+        let mut addresses: Vec<(String, u16, String)> = Vec::new();
+        file.items.retain(|dto| {
+            if dto.server_id != server_id {
+                return true;
+            }
+            let (host, port) = effective_addr(dto);
+            addresses.push((host.to_string(), port, dto.id.clone()));
+            removed.push(dto.id.clone());
+            false
+        });
+        if removed.is_empty() {
+            return Ok(removed);
+        }
+        self.save(&file)?;
+        for (host, port, id) in addresses {
+            self.release_addr(&host, port, &id);
+        }
+        {
+            let mut runtimes = self.runtimes.lock().expect("runtimes lock");
+            for id in &removed {
+                runtimes.remove(id);
+            }
+        }
+        self.notify_changed();
+        Ok(removed)
+    }
+
     /// 是否仍引用某服务器（规则归本模型，业务层提供待删的服务器 id）。
     pub fn references_server(&self, server_id: &str) -> Result<bool> {
         Ok(self.load()?.items.iter().any(|t| t.server_id == server_id))
@@ -1425,6 +1459,35 @@ mod tests {
             f.tunnels.can_remove_server(&f.server_id).expect("decision"),
             RemoveDecision::Allowed
         );
+    }
+
+    /// 删连接时连带删转发：一次写完，不留下孤儿。
+    #[test]
+    fn remove_for_server_takes_every_forward_of_that_server() {
+        let f = fixture("remove-for-server");
+        let a = f
+            .tunnels
+            .create(create_req("a", &f.server_id, 18091))
+            .expect("create a");
+        let b = f
+            .tunnels
+            .create(create_req("b", &f.server_id, 18092))
+            .expect("create b");
+
+        let removed = f.tunnels.remove_for_server(&f.server_id).expect("remove");
+        assert_eq!(removed, vec![a.id.clone(), b.id.clone()]);
+        assert!(f.tunnels.list().expect("list").items.is_empty());
+        assert_eq!(
+            f.tunnels.can_remove_server(&f.server_id).expect("decision"),
+            RemoveDecision::Allowed
+        );
+
+        // 幂等：再删一次不报错，也不返回任何 id。
+        assert!(f
+            .tunnels
+            .remove_for_server(&f.server_id)
+            .expect("remove again")
+            .is_empty());
     }
 
     #[test]

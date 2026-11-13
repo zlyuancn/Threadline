@@ -419,14 +419,10 @@ async function removeTunnel(row: { id: string; name: string }) {
   }
 
   await run(`t:${row.id}`, async () => {
-    for (const item of owned) {
-      await forwards.remove(item.definition.id);
-      if (forwards.lastError) {
-        ElMessage.error(forwards.lastError);
-        return;
-      }
-    }
-    await tunnels.removeServer(row.id);
+    // 连带删除交给服务端一次做完：本端只发一个请求。
+    // 以前是这里 for 循环逐条删转发，40 条转发就是 40 次请求 + 40 次写盘 +
+    // 40 次 hosts 同步，删一条连接要几秒。
+    await tunnels.removeServer(row.id, true);
     if (tunnels.lastError) {
       ElMessage.error(tunnels.lastError);
     } else {
