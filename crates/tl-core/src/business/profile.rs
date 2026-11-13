@@ -314,6 +314,14 @@ fn find_local_server(
         .iter()
         .find(|item| item.id == server.source_id)
         .or_else(|| items.iter().find(|item| item.name == server.name))
+        // 名字不一定还是包里的：`plan` 判成 `name_taken` 时，前端会预填
+        // 「deva (2)」这类建议名，提交上来就按这个名字找不到了。
+        // 同一台机器的实质是同一个 host+port，用它兜底。
+        .or_else(|| {
+            items.iter().find(|item| {
+                item.host.eq_ignore_ascii_case(&server.host) && item.port == server.port
+            })
+        })
         .map(|item| item.id.clone()))
 }
 
@@ -800,6 +808,58 @@ mod tests {
         assert_eq!(
             forwards[0].definition.server_id, local.id,
             "转发要挂到本机那条同名连接上"
+        );
+    }
+
+    /// `plan` 判成 `name_taken` 时，前端会预填建议名（`y (2)`），提交上来的
+    /// `name` 就不是本机那个了。只按名字找会落空，得靠 host+port 认出来。
+    #[test]
+    fn skipped_server_matches_by_address_when_name_was_renamed() {
+        let f = fixture("import-skip-server-renamed");
+        let local = f
+            .servers
+            .create(CreateServerRequest {
+                name: "y".into(),
+                host: "192.0.2.10".into(),
+                port: 22,
+                credential_id: String::new(),
+                username: "root".into(),
+                kind: Some(CredentialKind::Password),
+                secret: None,
+                passphrase: None,
+                host_key_fingerprint: None,
+                keepalive_secs: 30,
+                enabled: false,
+            })
+            .expect("create local server");
+
+        let result = import(
+            &f.servers,
+            &f.tunnels,
+            ProfileImportRequest {
+                servers: vec![ProfileImportServer {
+                    source_id: "other-machine-id".into(),
+                    // 前端预填的建议名，已经不等于本机那条连接的名字
+                    name: "y (2)".into(),
+                    host: "192.0.2.10".into(),
+                    port: 22,
+                    username: "root".into(),
+                    credential_kind: CredentialKind::Password,
+                    keepalive_secs: 30,
+                    host_key_fingerprint: None,
+                    action: "skip".into(),
+                    forwards: vec![import_forward("brand-new", 18091, "create")],
+                }],
+                keep_disabled: true,
+            },
+        )
+        .expect("import");
+
+        assert_eq!(result.created_servers, 0);
+        assert_eq!(result.created_forwards, 1, "改名不该让转发无处可去");
+        assert_eq!(
+            f.tunnels.list().expect("list").items[0].definition.server_id,
+            local.id
         );
     }
 }
