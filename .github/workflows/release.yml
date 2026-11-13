@@ -154,18 +154,19 @@ jobs:
           } | Set-Content -Encoding utf8 SHA256SUMS.txt
           Get-Content SHA256SUMS.txt | Write-Host
 
+      # 正文来自 CHANGELOG.md 对应版本那一节；generate_release_notes 只会贴一条
+      # commit 链接，用户看不到"改了什么"，所以这里自己生成。
+      - name: 生成更新说明
+        shell: pwsh
+        run: ./scripts/release-notes.ps1 -Version "${{ inputs.tag || github.ref_name }}"
+
       - name: 发布
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           draft: ${{ inputs.draft || false }}
-          generate_release_notes: true
           files: |
             src-tauri/target/release/bundle/nsis/*.exe
             Threadline_*_x64-portable.zip
             SHA256SUMS.txt
-          body: |
-            安装包**未做代码签名**，首次运行会出现 SmartScreen「未知发布者」提示：
-            点「更多信息 → 仍要运行」即可。请先用 `SHA256SUMS.txt` 核对文件。
-
-            安装后主程序名为 `Threadline.exe`。数据目录为 `%PUBLIC%\Threadline`。
+          body_path: release-body.md

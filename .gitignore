@@ -22,3 +22,6 @@ dist/
 
 # 本地构建的发布产物（不入库）
 /dist-release/
+
+# 发布正文（release-notes.ps1 生成）
+release-body.md
