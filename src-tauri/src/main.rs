@@ -743,6 +743,11 @@ async fn sync_hosts() -> Result<(), String> {
         .map_err(|e| format!("提权任务异常：{e}"))?
 }
 
+/// 写一次 hosts。
+///
+/// 仍然是「按需一次 UAC」（`runas`）。试过用 SYSTEM 计划任务做静默写入：
+/// 任务能建、能以 SYSTEM 身份跑，但 `schtasks /Run` 默认只允许管理员触发
+/// （Access denied），放开要改任务的安全描述符，风险大于收益，已放弃。
 fn elevate_hosts_sync() -> Result<(), String> {
     let core = sibling_core().ok_or_else(|| "找不到 tl-core.exe，无法写入 hosts".to_string())?;
     let dir = data_dir();

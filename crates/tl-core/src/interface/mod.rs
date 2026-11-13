@@ -21,10 +21,9 @@ use tl_protocol::{
     CreateTunnelRequest, CredentialList, CredentialSummary, GatewayCaStatus, GatewayTrustResult,
     HealthResponse, HostKeyView, HostsStatus, HostsSyncResult, LogsResponse,
     PatchCredentialRequest, PatchServerRequest, PatchTunnelRequest, ProbeDraftRequest,
-    ProbeServerReport,
-    ProxySyncResult, ServerDto, ServerEnabledResult, ServerList, SessionClosed, SessionState,
-    SetAutostartRequest, SetServerEnabledRequest, ShutdownAccepted, TunnelList, TunnelView,
-    WhoamiResponse, API_PREFIX,
+    ProbeServerReport, ProxySyncResult, ServerDto, ServerEnabledResult, ServerList, SessionClosed,
+    SessionState, SetAutostartRequest, SetServerEnabledRequest, ShutdownAccepted, TunnelList,
+    TunnelView, WhoamiResponse, API_PREFIX,
 };
 
 use crate::business::Services;

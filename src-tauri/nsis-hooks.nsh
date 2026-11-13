@@ -52,4 +52,9 @@
   nsExec::ExecToLog 'taskkill /F /IM "tl-core.exe" /T'
   Pop $R0
   Sleep 700
+
+  ; 早期版本注册过写 hosts 的计划任务（SYSTEM 身份），后来因为普通用户无法
+  ; `schtasks /Run` 放弃了。这里顺手清掉可能存在的残留，失败无所谓。
+  nsExec::ExecToLog 'schtasks /Delete /F /TN "ThreadlineHostsSync"'
+  Pop $R0
 !macroend

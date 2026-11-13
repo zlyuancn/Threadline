@@ -462,12 +462,172 @@ fn hosts_sync_entry() -> Option<ExitCode> {
     if args.next().as_deref() != Some("hosts") {
         return None;
     }
-    let sub = args.next();
-    if sub.as_deref() != Some("sync") {
-        eprintln!("未知子命令：hosts {}", sub.unwrap_or_default());
-        return Some(ExitCode::from(EXIT_BAD_ARGS));
+    match args.next().as_deref() {
+        Some("sync") => Some(ExitCode::from(run_hosts_sync_once(args))),
+        Some("install-task") => Some(ExitCode::from(run_hosts_task_install(args))),
+        Some("remove-task") => Some(ExitCode::from(run_hosts_task_remove())),
+        other => {
+            eprintln!("未知子命令：hosts {}", other.unwrap_or_default());
+            Some(ExitCode::from(EXIT_BAD_ARGS))
+        }
     }
-    Some(ExitCode::from(run_hosts_sync_once(args)))
+}
+
+/// 计划任务名。注册为 SYSTEM 身份后，写 hosts 不再需要每次弹 UAC。
+const HOSTS_TASK: &str = "ThreadlineHostsSync";
+
+/// 注册（或更新）计划任务，并立刻同步一次。
+///
+/// 这个子命令**必须提权**运行：只有管理员能创建 SYSTEM 身份的定时任务。
+/// 首次点「写入」时由 Agent 拉一次 UAC 跑它，之后 Agent 直接 `schtasks /Run`，
+/// 不再打扰用户。
+fn run_hosts_task_install(mut args: impl Iterator<Item = String>) -> u8 {
+    let mut data_dir: Option<PathBuf> = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--data-dir" => {
+                let Some(value) = args.next() else {
+                    eprintln!("--data-dir 需要一个路径");
+                    return EXIT_BAD_ARGS;
+                };
+                data_dir = Some(PathBuf::from(value));
+            }
+            other => {
+                eprintln!("不支持的参数：{other}（只允许 --data-dir）");
+                return EXIT_BAD_ARGS;
+            }
+        }
+    }
+    let Some(dir) = data_dir else {
+        eprintln!("缺少 --data-dir");
+        return EXIT_BAD_ARGS;
+    };
+
+    // 与 hosts sync 同一套校验：任务动作里写的是这个目录，不能让它指向任意位置。
+    let expected = trusted_data_dir();
+    if !same_dir(&dir, &expected) {
+        eprintln!(
+            "数据目录不在允许范围：{}（只允许 {}）",
+            dir.display(),
+            expected.display()
+        );
+        return EXIT_BAD_ARGS;
+    }
+    if has_reparse_point(&dir) || has_reparse_point(&dir.join("logs")) {
+        eprintln!("数据目录包含重解析点，拒绝注册：{}", dir.display());
+        return EXIT_BAD_ARGS;
+    }
+
+    if let Err(e) = register_hosts_task(&dir) {
+        eprintln!("注册计划任务失败：{e}");
+        return 1;
+    }
+
+    // 任务刚建好，顺手把这次请求也做掉：用户点一次就生效，不必等下一次。
+    run_hosts_sync_once(["--data-dir".to_string(), dir.display().to_string()].into_iter())
+}
+
+fn run_hosts_task_remove() -> u8 {
+    let output = std::process::Command::new("schtasks")
+        .args(["/Delete", "/F", "/TN", HOSTS_TASK])
+        .output();
+    match output {
+        Ok(out) if out.status.success() => 0,
+        // 任务本来就不存在（退出码 1）也算成功：卸载时不该因此报错。
+        Ok(_) => 0,
+        Err(e) => {
+            eprintln!("调用 schtasks 失败：{e}");
+            1
+        }
+    }
+}
+
+/// 写一份任务 XML 交给 `schtasks /Create`。
+///
+/// 用 XML 而不是 `/TR`：命令行里带引号的数据目录会把 `/TR` 拆坏，
+/// XML 能精确表达 `Command` + `Arguments`。
+fn register_hosts_task(dir: &Path) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("取自身路径失败：{e}"))?;
+    let action = format!("hosts sync --data-dir \"{}\"", dir.display());
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Threadline: write the managed block into the hosts file</Description>
+  </RegistrationInfo>
+  <Triggers />
+  <Principals>
+    <Principal id="Author">
+      <UserId>S-1-5-18</UserId>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{command}</Command>
+      <Arguments>{action}</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"#,
+        command = xml_escape(&exe.display().to_string()),
+        action = xml_escape(&action)
+    );
+
+    // schtasks 只接受 UTF-16（带 BOM）的 XML。
+    let path = std::env::temp_dir().join("threadline-hosts-task.xml");
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in xml.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    std::fs::write(&path, &bytes).map_err(|e| format!("写任务 XML 失败：{e}"))?;
+
+    let output = std::process::Command::new("schtasks")
+        .args(["/Create", "/F", "/TN", HOSTS_TASK, "/XML"])
+        .arg(&path)
+        .output()
+        .map_err(|e| format!("调用 schtasks 失败：{e}"))?;
+    let _ = std::fs::remove_file(&path);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = if stderr.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            stderr.trim().to_string()
+        };
+        return Err(format!("schtasks 返回失败：{detail}"));
+    }
+    Ok(())
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 fn run_hosts_sync_once(mut args: impl Iterator<Item = String>) -> u8 {
@@ -509,44 +669,60 @@ fn run_hosts_sync_once(mut args: impl Iterator<Item = String>) -> u8 {
 
     let hosts_path = tl_core::foundation::hosts::hosts_path();
     let existing = tl_core::foundation::hosts::read_raw(&hosts_path).unwrap_or_default();
-    let file: Option<tl_protocol::TunnelsFile> =
-        tl_core::foundation::store::read_json(&dir.join("tunnels.json")).unwrap_or(None);
+    // 读失败**绝不能**当成「没有配置」：主进程正在原子替换这个文件时，
+    // 提权进程可能读到半截 JSON。把解析失败当空集合，会把整块域名从 hosts 抹掉。
+    let items = match tl_core::foundation::store::read_json::<tl_protocol::TunnelsFile>(
+        &dir.join("tunnels.json"),
+    ) {
+        Ok(Some(file)) => file.items,
+        Ok(None) => Vec::new(),
+        Err(e) => {
+            eprintln!("读取 tunnels.json 失败，拒绝改动 hosts：{e}");
+            let result = HostsSyncFileResult {
+                ok: false,
+                code: EXIT_DATA_DIR as u32,
+                message: Some(format!("读取配置失败，未改动 hosts：{e}")),
+                at: clock::now_iso8601(),
+            };
+            let _ = tl_core::foundation::store::write_json_atomic(
+                &dir.join("hosts.result.json"),
+                &result,
+            );
+            return EXIT_DATA_DIR;
+        }
+    };
 
     // 这里读到的是**磁盘上的文件**，不能假定它一定由业务层写过：提权进程写 hosts
     // 之前必须自己再过一遍校验（域名规则同 `models::tunnel::validate_domain`，
     // 地址只允许回环池），否则篡改 tunnels.json 就能往系统 hosts 里注入任意条目。
-    let mut entries: Vec<tl_core::foundation::hosts::Entry> = file
-        .map(|file| {
-            file.items
-                .into_iter()
-                .filter(|dto| !dto.domain.is_empty() && !dto.domain_host.is_empty())
-                .filter_map(|dto| {
-                    let domain = match tl_core::models::tunnel::validate_domain(&dto.domain) {
-                        Ok(domain) => domain,
-                        Err(e) => {
-                            eprintln!("跳过非法域名 {}：{e}", dto.domain_host);
-                            return None;
-                        }
-                    };
-                    let address: std::net::IpAddr = match dto.domain_host.parse() {
-                        Ok(address) => address,
-                        Err(_) => {
-                            eprintln!("跳过非 IP 地址：{}", dto.domain_host);
-                            return None;
-                        }
-                    };
-                    if !address.is_loopback() {
-                        eprintln!("跳过非回环地址：{address}");
-                        return None;
-                    }
-                    Some(tl_core::foundation::hosts::Entry {
-                        address: address.to_string(),
-                        domain,
-                    })
-                })
-                .collect()
+    let mut entries: Vec<tl_core::foundation::hosts::Entry> = items
+        .into_iter()
+        .filter(|dto| !dto.domain.is_empty() && !dto.domain_host.is_empty())
+        .filter_map(|dto| {
+            let domain = match tl_core::models::tunnel::validate_domain(&dto.domain) {
+                Ok(domain) => domain,
+                Err(e) => {
+                    eprintln!("跳过非法域名 {}：{e}", dto.domain_host);
+                    return None;
+                }
+            };
+            let address: std::net::IpAddr = match dto.domain_host.parse() {
+                Ok(address) => address,
+                Err(_) => {
+                    eprintln!("跳过非 IP 地址：{}", dto.domain_host);
+                    return None;
+                }
+            };
+            if !address.is_loopback() {
+                eprintln!("跳过非回环地址：{address}");
+                return None;
+            }
+            Some(tl_core::foundation::hosts::Entry {
+                address: address.to_string(),
+                domain,
+            })
         })
-        .unwrap_or_default();
+        .collect();
     entries.sort();
 
     let desired = tl_core::foundation::hosts::render(&existing, &entries);
