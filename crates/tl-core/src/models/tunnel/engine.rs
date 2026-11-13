@@ -559,6 +559,7 @@ pub async fn serve_listener(
     on_error: Box<dyn Fn(String) + Send + Sync>,
     traffic: Arc<Traffic>,
     entry_tls: Option<TlsAcceptor>,
+    public_domain: Option<String>,
 ) -> (EngineOutcome, TcpListener) {
     let outcome = serve_listener_inner(
         &listener,
@@ -570,6 +571,7 @@ pub async fn serve_listener(
         on_error,
         traffic,
         entry_tls.as_ref(),
+        public_domain.as_deref(),
     )
     .await;
 
@@ -587,6 +589,7 @@ async fn serve_listener_inner(
     on_error: Box<dyn Fn(String) + Send + Sync>,
     traffic: Arc<Traffic>,
     entry_tls: Option<&TlsAcceptor>,
+    public_domain: Option<&str>,
 ) -> EngineOutcome {
     let on_error = Arc::new(on_error);
     let inflight = Arc::new(AtomicUsize::new(0));
@@ -653,9 +656,21 @@ async fn serve_listener_inner(
                 let handle = Arc::clone(&session);
                 let target = (remote_host.clone(), remote_port);
                 let traffic = Arc::clone(&traffic);
+                // 引用不能进 'static 任务，先落成拥有所有权的值
+                let rewrite_http = entry_tls.is_some();
+                let public_fallback = public_domain.map(str::to_string);
                 tokio::spawn(async move {
                     // 连不上远端端口时错误必须上报，否则界面只表现为"连接被重置"。
-                    if let Err(e) = forward_one(handle, target.clone(), inbound, traffic).await {
+                    if let Err(e) = forward_one(
+                        handle,
+                        target.clone(),
+                        inbound,
+                        traffic,
+                        rewrite_http,
+                        public_fallback,
+                    )
+                    .await
+                    {
                         report(format!(
                             "无法连接 {}:{}（服务器侧）：{e}",
                             target.0, target.1
@@ -749,12 +764,22 @@ async fn forward_one<S>(
     (remote_host, remote_port): (String, u16),
     inbound: S,
     traffic: Arc<Traffic>,
+    rewrite_http: bool,
+    public_fallback: Option<String>,
 ) -> Result<(), std::io::Error>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     // 目标不可达时 russh 可能一直等对端确认：没有超时的话，本地连接会永久挂起，
     // 用户看到的是"连上了但没反应"，也永远不会有错误记录。
+    // 远端地址按转发规则里填的原样拼：它既是上行 `Host`，也是下行识别 Location 的依据。
+    // 80/443 是默认端口，不写进 Host。
+    let upstream_host = remote_host.clone();
+    let authority = if remote_port == 80 || remote_port == 443 {
+        upstream_host.clone()
+    } else {
+        format!("{upstream_host}:{remote_port}")
+    };
     let channel = tokio::time::timeout(
         CHANNEL_OPEN_TIMEOUT,
         session.channel_open_direct_tcpip(remote_host, remote_port as u32, "127.0.0.1", 0),
@@ -777,14 +802,232 @@ where
 
     // copy_bidirectional 只在结束时给出总数，界面上就永远看不到"正在跑"的速率。
     // 拆成两条单方向搬运，边读边累加，计数器随时可读。
+    //
+    // TLS 终结的连接额外做一次 HTTP 头改写（见 `pipe_http`）：只有这里能看见明文。
+    //
+    // 域名是本机的约定：上行把 Host 换成远端地址，远端就不会把 `deva.zly.m`
+    // 写进它生成的重定向；下行再把指向远端的 Location 换回浏览器访问的地址。
+    let observed = Arc::new(std::sync::Mutex::new(None::<String>));
+    let rewrite = rewrite_http.then(|| HttpRewrite {
+        upstream_host,
+        authority,
+        fallback: public_fallback.clone(),
+        observed: Arc::clone(&observed),
+    });
     let up = Arc::clone(&traffic);
     let down = Arc::clone(&traffic);
+    let up_ctx = rewrite.clone();
+    let down_ctx = rewrite.clone();
     let (to_remote, to_local) = tokio::join!(
-        pipe(in_read, out_write, move |n| up.add_up(n)),
-        pipe(out_read, in_write, move |n| down.add_down(n)),
+        pipe_dir(in_read, out_write, move |n| up.add_up(n), up_ctx, true),
+        pipe_dir(
+            out_read,
+            in_write,
+            move |n| down.add_down(n),
+            down_ctx,
+            false
+        ),
     );
     to_remote?;
     to_local?;
+    Ok(())
+}
+
+/// 一次 HTTP 头改写的上下文：两个方向共用一个 `observed`，上行写、下行读。
+#[derive(Clone)]
+struct HttpRewrite {
+    /// 远端主机名（不含端口）
+    upstream_host: String,
+    /// 上行 `Host` 的值：80/443 是默认端口，写出来是噪音
+    authority: String,
+    /// 请求没带 Host 时的兜底（配置里的域名）
+    fallback: Option<String>,
+    /// 浏览器实际请求的 Host，上行解析出来后填进来
+    observed: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+impl HttpRewrite {
+    /// 浏览器访问的主机名（去掉端口）。优先用请求里看到的，其次用配置兜底。
+    fn public_host(&self) -> Option<String> {
+        let observed = self.observed.lock().ok().and_then(|slot| slot.clone());
+        observed.or_else(|| self.fallback.clone()).map(|host| {
+            host.rsplit_once(':')
+                .map(|(name, _)| name.to_string())
+                .unwrap_or(host)
+        })
+    }
+}
+
+/// 按是否需要 HTTP 改写选择搬运方式。
+async fn pipe_dir<R, W, F>(
+    reader: R,
+    writer: W,
+    count: F,
+    ctx: Option<HttpRewrite>,
+    request: bool,
+) -> Result<(), std::io::Error>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+    F: Fn(u64),
+{
+    match ctx {
+        Some(ctx) => pipe_http(reader, writer, count, ctx, request).await,
+        None => pipe(reader, writer, count).await,
+    }
+}
+
+/// 头块上限：超过就不当 HTTP 处理，原样透传（防止把二进制流当文本缓冲）。
+const MAX_HEAD: usize = 32 * 1024;
+
+fn find_head_end(bytes: &[u8]) -> Option<usize> {
+    bytes
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|p| p + 4)
+}
+
+/// 改写第一块 HTTP 头，协议之外的内容一律不动。
+///
+/// - 请求方向：`Host` 换成远端地址（本机域名不出本机），并补
+///   `X-Forwarded-Proto: https`、`X-Forwarded-Host: <浏览器用的主机名>`。
+///   同时把浏览器用的主机名记进 `observed`，供响应方向使用。
+/// - 响应方向：`Location` 指向远端地址时，换回浏览器访问的那个地址（https）。
+///   第三方地址一律不动。
+///
+/// 非 HTTP 流量（首行不含 `HTTP/`）原样返回。
+fn rewrite_head(head: &[u8], ctx: &HttpRewrite, request: bool) -> Vec<u8> {
+    let text = String::from_utf8_lossy(head);
+    let mut lines: Vec<String> = text.split("\r\n").map(str::to_string).collect();
+    let first = lines.first().cloned().unwrap_or_default();
+
+    if request {
+        if !first.contains(" HTTP/") {
+            return head.to_vec();
+        }
+        let mut host_seen: Option<String> = None;
+        let mut proto_seen = false;
+        let mut forwarded_seen = false;
+        for line in lines.iter_mut() {
+            let lower = line.to_ascii_lowercase();
+            if lower.starts_with("host:") {
+                if let Some(colon) = line.find(':') {
+                    host_seen = Some(line[colon + 1..].trim().to_string());
+                }
+                *line = format!("Host: {}", ctx.authority);
+            } else if lower.starts_with("x-forwarded-proto:") {
+                *line = "X-Forwarded-Proto: https".to_string();
+                proto_seen = true;
+            } else if lower.starts_with("x-forwarded-host:") {
+                forwarded_seen = true;
+            }
+        }
+        let mut extra = Vec::new();
+        if !proto_seen {
+            extra.push("X-Forwarded-Proto: https".to_string());
+        }
+        if let Some(host) = &host_seen {
+            if !forwarded_seen {
+                extra.push(format!("X-Forwarded-Host: {host}"));
+            }
+            if let Ok(mut slot) = ctx.observed.lock() {
+                if slot.is_none() {
+                    *slot = Some(host.clone());
+                }
+            }
+        }
+        if !extra.is_empty() {
+            for (offset, line) in extra.into_iter().enumerate() {
+                lines.insert(1 + offset, line);
+            }
+        }
+    } else {
+        if !first.starts_with("HTTP/") {
+            return head.to_vec();
+        }
+        let Some(public) = ctx.public_host() else {
+            return head.to_vec();
+        };
+        for line in lines.iter_mut() {
+            let lower = line.to_ascii_lowercase();
+            if !lower.starts_with("location:") {
+                continue;
+            }
+            let Some(colon) = line.find(':') else {
+                continue;
+            };
+            let value = line[colon + 1..].trim();
+            let Some(rest) = value.strip_prefix("http://") else {
+                continue;
+            };
+            let (authority, path) = match rest.find('/') {
+                Some(idx) => (&rest[..idx], &rest[idx..]),
+                None => (rest, ""),
+            };
+            let ours = authority.eq_ignore_ascii_case(&ctx.authority)
+                || authority.eq_ignore_ascii_case(&ctx.upstream_host);
+            if ours {
+                *line = format!("Location: https://{public}{path}");
+            }
+        }
+    }
+
+    lines.join("\r\n").into_bytes()
+}
+
+/// 带 HTTP 头改写的单方向搬运：先把头凑齐改写，之后退回纯字节透传。
+async fn pipe_http<R, W, F>(
+    mut reader: R,
+    mut writer: W,
+    count: F,
+    ctx: HttpRewrite,
+    request: bool,
+) -> Result<(), std::io::Error>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+    F: Fn(u64),
+{
+    let mut buffer = vec![0u8; 16 * 1024];
+    let mut head: Vec<u8> = Vec::with_capacity(4096);
+    let mut head_done = false;
+
+    loop {
+        let read = reader.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        if head_done {
+            writer.write_all(&buffer[..read]).await?;
+            count(read as u64);
+            continue;
+        }
+
+        head.extend_from_slice(&buffer[..read]);
+        if let Some(end) = find_head_end(&head) {
+            let body = head.split_off(end);
+            let rewritten = rewrite_head(&head, &ctx, request);
+            writer.write_all(&rewritten).await?;
+            count(rewritten.len() as u64);
+            if !body.is_empty() {
+                writer.write_all(&body).await?;
+                count(body.len() as u64);
+            }
+            head_done = true;
+        } else if head.len() > MAX_HEAD {
+            // 不是 HTTP（或头异常长）：放弃改写，原样送出去
+            writer.write_all(&head).await?;
+            count(head.len() as u64);
+            head.clear();
+            head_done = true;
+        }
+    }
+
+    if !head_done && !head.is_empty() {
+        writer.write_all(&head).await?;
+        count(head.len() as u64);
+    }
+    let _ = writer.shutdown().await;
     Ok(())
 }
 
@@ -815,6 +1058,61 @@ where
 mod tests {
     use super::*;
     use tokio::net::TcpStream;
+
+    fn rewrite_ctx(observed: Option<&str>, fallback: Option<&str>) -> HttpRewrite {
+        HttpRewrite {
+            upstream_host: "192.168.28.98".to_string(),
+            authority: "192.168.28.98:8080".to_string(),
+            fallback: fallback.map(str::to_string),
+            observed: Arc::new(std::sync::Mutex::new(observed.map(str::to_string))),
+        }
+    }
+
+    #[test]
+    fn request_host_is_replaced_by_forward_target() {
+        // 本机域名不出本机：上行把 Host 换成转发规则里的远端地址
+        let ctx = rewrite_ctx(None, None);
+        let head = b"GET /Dashboard HTTP/1.1\r\nHost: deva.zly.m\r\nAccept: */*\r\n\r\n";
+        let out = String::from_utf8(rewrite_head(head, &ctx, true)).expect("utf8");
+        assert!(out.contains("Host: 192.168.28.98:8080"), "{out}");
+        // 精确到整行：`X-Forwarded-Host:` 里仍应保留原域名
+        assert!(
+            !out.contains("\r\nHost: deva.zly.m\r\n"),
+            "域名仍留在 Host 上：{out}"
+        );
+        assert!(out.contains("X-Forwarded-Proto: https"), "{out}");
+        assert!(out.contains("X-Forwarded-Host: deva.zly.m"), "{out}");
+        // 供下行改写使用
+        assert_eq!(
+            ctx.observed.lock().expect("lock").as_deref(),
+            Some("deva.zly.m")
+        );
+    }
+
+    #[test]
+    fn response_location_is_rewritten_back_to_public_host() {
+        // 远端按自己的地址生成 302，下行换回浏览器访问的那个地址
+        let ctx = rewrite_ctx(Some("deva.zly.m"), None);
+        let head =
+            b"HTTP/1.1 302 Found\r\nLocation: http://192.168.28.98:8080/login\r\nContent-Length: 0\r\n\r\n";
+        let out = String::from_utf8(rewrite_head(head, &ctx, false)).expect("utf8");
+        assert!(out.contains("Location: https://deva.zly.m/login"), "{out}");
+    }
+
+    #[test]
+    fn foreign_location_is_left_alone() {
+        let ctx = rewrite_ctx(Some("deva.zly.m"), Some("deva.zly.m"));
+        let head = b"HTTP/1.1 302 Found\r\nLocation: http://example.com/x\r\n\r\n";
+        let out = String::from_utf8(rewrite_head(head, &ctx, false)).expect("utf8");
+        assert!(out.contains("Location: http://example.com/x"), "{out}");
+    }
+
+    #[test]
+    fn non_http_traffic_passes_through() {
+        let ctx = rewrite_ctx(Some("deva.zly.m"), None);
+        let raw = b"\x16\x03\x01\x00\x05binary";
+        assert_eq!(rewrite_head(raw, &ctx, true), raw.to_vec());
+    }
 
     #[test]
     fn login_debug_redacts_secrets() {

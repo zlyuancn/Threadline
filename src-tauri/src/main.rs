@@ -1075,6 +1075,73 @@ fn install_dir() -> Option<PathBuf> {
     }
 }
 
+/// 代理地址。环境变量优先（终端里跑时更明确），否则读 Windows 系统代理。
+///
+/// 这台机器的网络里 GitHub 只能经企业代理访问：直连时 DNS 直接解析失败
+/// （`os error 11001`），而浏览器/PowerShell 因为自动读系统代理所以是通的。
+fn proxy_url() -> Option<String> {
+    for key in ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] {
+        if let Ok(value) = std::env::var(key) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(if value.contains("://") {
+                    value.to_string()
+                } else {
+                    format!("http://{value}")
+                });
+            }
+        }
+    }
+    system_proxy()
+}
+
+/// 读 `HKCU\...\Internet Settings`：`ProxyEnable=1` 时取 `ProxyServer`。
+/// 值可能是 `host:port`，也可能是 `http=h:p;https=h:p` 的分协议写法。
+#[cfg(windows)]
+fn system_proxy() -> Option<String> {
+    let settings = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings")
+        .ok()?;
+    let enabled: u32 = settings.get_value("ProxyEnable").unwrap_or(0);
+    if enabled == 0 {
+        return None;
+    }
+    let server: String = settings.get_value("ProxyServer").unwrap_or_default();
+    if server.is_empty() {
+        return None;
+    }
+    let host = if server.contains('=') {
+        server
+            .split(';')
+            .find_map(|part| part.strip_prefix("https=").or_else(|| part.strip_prefix("http=")))
+            .unwrap_or_default()
+    } else {
+        server.as_str()
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some(format!("http://{host}"))
+}
+
+#[cfg(not(windows))]
+fn system_proxy() -> Option<String> {
+    None
+}
+
+/// 带代理与超时的 HTTP agent。`ureq` 不会自己读系统代理，必须显式传。
+fn http_agent(overall: Duration) -> ureq::Agent {
+    let mut builder = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout(overall);
+    if let Some(url) = proxy_url() {
+        if let Ok(proxy) = ureq::Proxy::new(&url) {
+            builder = builder.proxy(proxy);
+        }
+    }
+    builder.build()
+}
+
 /// 查 GitHub Releases 的最新版。失败时返回 `Err`，由前端决定是否弹提示。
 ///
 /// 没有 token：公开仓的 `latest` 接口未认证也能用（每小时 60 次，
@@ -1086,10 +1153,10 @@ async fn check_update(app: AppHandle) -> Result<UpdateInfo, String> {
     let url = format!("https://api.github.com/repos/{UPDATE_REPO}/releases/latest");
 
     tauri::async_runtime::spawn_blocking(move || {
-        let body: serde_json::Value = ureq::get(&url)
+        let body: serde_json::Value = http_agent(Duration::from_secs(20))
+            .get(&url)
             .set("User-Agent", "Threadline-Updater")
             .set("Accept", "application/vnd.github+json")
-            .timeout(Duration::from_secs(12))
             .call()
             .map_err(|e| format!("请求失败：{e}"))?
             .into_json()
@@ -1152,9 +1219,9 @@ async fn download_update(app: AppHandle, url: String, version: String) -> Result
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::{Read, Write};
 
-        let resp = ureq::get(&url)
+        let resp = http_agent(Duration::from_secs(600))
+            .get(&url)
             .set("User-Agent", "Threadline-Updater")
-            .timeout(Duration::from_secs(600))
             .call()
             .map_err(|e| format!("下载失败：{e}"))?;
         let total: u64 = resp

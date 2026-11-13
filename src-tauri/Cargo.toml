@@ -34,3 +34,5 @@ ureq = { version = "2", features = ["json"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Networking_WinInet", "Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# 读系统代理：ureq 只认环境变量，而这台机器上 GitHub 只能经系统代理访问
+winreg = "0.52"

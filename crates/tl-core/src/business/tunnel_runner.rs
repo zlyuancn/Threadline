@@ -640,6 +640,14 @@ impl TunnelRunner {
                 on_error,
                 std::sync::Arc::clone(&traffic),
                 entry_tls,
+                {
+                    let domain = def.domain.trim();
+                    if domain.is_empty() {
+                        None
+                    } else {
+                        Some(domain.to_string())
+                    }
+                },
             )
             .await;
             current = returned;
