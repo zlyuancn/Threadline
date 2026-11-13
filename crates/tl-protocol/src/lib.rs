@@ -333,6 +333,24 @@ pub struct SessionClosed {
     pub stopped_forwards: usize,
 }
 
+/// 用还没保存的表单内容试连一次（新建连接时「测试」按钮走这里）。
+///
+/// 密码/私钥只在本次调用里用：不落库、不进日志。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProbeDraftRequest {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub credential_kind: CredentialKind,
+    /// 密码，或私钥 PEM。
+    pub secret: String,
+    #[serde(default)]
+    pub passphrase: Option<String>,
+    /// 编辑已有连接时带上已信任的指纹；新建留空。
+    #[serde(default)]
+    pub host_key_fingerprint: Option<String>,
+}
+
 /// `POST /servers/{id}/probe` 的结果：告诉界面卡在哪一步。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProbeServerReport {
@@ -863,6 +881,8 @@ pub struct HostsStatus {
     pub path: String,
     /// 当前期望写入托管区块的条目。
     pub managed: Vec<ManagedHostEntry>,
+    /// 托管区块里还缺的条目（`address domain`）。空表示块内容与期望一致。
+    pub missing: Vec<String>,
     /// 块外冲突（有冲突时不写入，等用户处理）。
     pub conflicts: Vec<HostsConflict>,
     /// 当前进程没有权限写 hosts，需要用户点「写入」触发 UAC。

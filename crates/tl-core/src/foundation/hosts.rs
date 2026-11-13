@@ -132,6 +132,44 @@ pub fn render(existing: &[u8], entries: &[Entry]) -> Vec<u8> {
     out
 }
 
+/// 托管区块里还缺哪些条目，返回 `address domain` 形式。
+///
+/// 界面靠它回答「到底差哪一条」：只报总数的话，用户看到「27 个待写入」会以为
+/// 整块都要重写，实际往往只差新增的那一个域名。
+pub fn missing(existing: &[u8], entries: &[Entry]) -> Vec<String> {
+    let mut present: HashSet<(String, String)> = HashSet::new();
+    let mut in_block = false;
+    for (content, _) in split_lines(existing) {
+        let trimmed = trim_ascii(content);
+        if is_marker(trimmed, BEGIN_MARKER) {
+            in_block = true;
+            continue;
+        }
+        if is_marker(trimmed, END_MARKER) {
+            in_block = false;
+            continue;
+        }
+        if !in_block {
+            continue;
+        }
+        let text = String::from_utf8_lossy(trimmed);
+        let mut parts = text.split_whitespace();
+        if let (Some(address), Some(domain)) = (parts.next(), parts.next()) {
+            present.insert((address.to_ascii_lowercase(), domain.to_ascii_lowercase()));
+        }
+    }
+    entries
+        .iter()
+        .filter(|entry| {
+            !present.contains(&(
+                entry.address.to_ascii_lowercase(),
+                entry.domain.to_ascii_lowercase(),
+            ))
+        })
+        .map(|entry| format!("{} {}", entry.address, entry.domain))
+        .collect()
+}
+
 /// 托管区块之外、已经指向目标域名的行。命中即冲突，不覆盖。
 pub fn conflicts(existing: &[u8], domains: &[String]) -> Vec<Conflict> {
     if domains.is_empty() {
@@ -309,6 +347,24 @@ mod tests {
         let once = render(original, &entries);
         let twice = render(&once, &entries);
         assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn missing_reports_only_absent_entries() {
+        // 已经写好的不报，新增的那条才报——界面据此告诉用户「到底差哪个域名」
+        let existing = render(
+            b"127.0.0.1 localhost\r\n",
+            &[entry("127.0.0.2", "a.example.com")],
+        );
+        let out = missing(
+            &existing,
+            &[
+                entry("127.0.0.2", "a.example.com"),
+                entry("127.0.0.3", "b.example.com"),
+            ],
+        );
+        assert_eq!(out, vec!["127.0.0.3 b.example.com".to_string()]);
+        assert!(missing(&existing, &[entry("127.0.0.2", "a.example.com")]).is_empty());
     }
 
     #[test]

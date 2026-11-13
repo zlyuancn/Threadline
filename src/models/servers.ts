@@ -11,6 +11,7 @@ import type {
   CredentialSummary,
   HostKeyView,
   PatchCredentialRequest,
+  ProbeDraftRequest,
   ProbeServerReport,
   PatchServerRequest,
   ServerDto,
@@ -96,6 +97,18 @@ export const useServersStore = defineStore('servers', () => {
   async function probeServer(id: string): Promise<ProbeServerReport | null> {
     try {
       const report = await serversApi.probe(id);
+      lastError.value = '';
+      return report;
+    } catch (e) {
+      lastError.value = e instanceof ApiFailure ? e.message : String(e);
+      return null;
+    }
+  }
+
+  /** 保存前试连：拿表单里的值直接探，不落库。 */
+  async function probeDraft(req: ProbeDraftRequest): Promise<ProbeServerReport | null> {
+    try {
+      const report = await serversApi.probeDraft(req);
       lastError.value = '';
       return report;
     } catch (e) {
@@ -241,6 +254,7 @@ export const useServersStore = defineStore('servers', () => {
     refresh,
     createServer,
     probeServer,
+  probeDraft,
     updateServer,
     removeServer,
     reorder,

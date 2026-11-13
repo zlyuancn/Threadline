@@ -82,6 +82,20 @@ describe('forwardView', () => {
     expect(endpointLabel(view({ scheme: 'rdp' }) as never)).toBe('127.0.0.1:16100');
   });
 
+  it('prefers the domain for non-web entries too', () => {
+    // 配了域名后客户端连的是域名：回环地址只是内部实现，显示出来会误导
+    expect(endpointLabel(view({ scheme: 'rdp', domain: 'mypc.zly.m' }) as never)).toBe(
+      'mypc.zly.m:16100',
+    );
+    expect(endpointLabel(view({ scheme: 'ssh', domain: 'box.lan' }) as never)).toBe(
+      'box.lan:16100',
+    );
+    // 443 是默认端口，写出来反而奇怪
+    expect(
+      endpointLabel(view({ scheme: 'tcp', domain: 'db.lan', local_port: 443 }) as never),
+    ).toBe('db.lan');
+  });
+
   it('derives the favicon from the local entry, never from a hardcoded list', () => {
     expect(faviconUrl(view({ scheme: 'http' }) as never)).toBe(
       'http://127.0.0.1:16100/favicon.ico',

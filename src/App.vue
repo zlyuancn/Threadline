@@ -242,8 +242,12 @@ const hostsBanner = computed<HostsAction | null>(() => {
     return null;
   }
   if (status.pending || status.needs_elevation) {
+    // 只报总数会让用户以为整块要重写，实际常常只差新增的那一两个
+    const missing = (status.missing ?? []).map((line) => line.split(/\s+/).pop() ?? line);
+    const detail =
+      missing.length > 0 && missing.length <= 3 ? `：${missing.join('、')}` : '';
     return {
-      text: `${status.managed.length} 个域名待写入 hosts`,
+      text: `${status.managed.length} 个域名待写入 hosts${detail}`,
       actionLabel: '写入',
       action: () => {
         void writeHosts();
@@ -275,9 +279,20 @@ async function writeHosts() {
   try {
     const result = await hostsApi.sync();
     if (result.written) {
+      // 复查一次：提权被拒时后端仍可能报 written，只有 hosts 真的变了才算成功
+      await refreshHosts();
+      if (hosts.value?.pending) {
+        ElMessage.error('写入未生效，请确认已允许管理员授权');
+        return;
+      }
       ElMessage.success('已写入 hosts');
     } else if (result.needs_elevation) {
       await syncHostsElevated();
+      await refreshHosts();
+      if (hosts.value?.pending) {
+        ElMessage.error('写入未生效，请确认已允许管理员授权');
+        return;
+      }
       ElMessage.success('已写入 hosts');
     } else {
       ElMessage.warning(result.status.last_error ?? '写入未完成');

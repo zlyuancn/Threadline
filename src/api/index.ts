@@ -19,6 +19,7 @@ import type {
   PatchCredentialRequest,
   PatchServerRequest,
   PatchTunnelRequest,
+  ProbeDraftRequest,
   ProbeServerReport,
   ServerEnabledResult,
   SessionClosed,
@@ -40,6 +41,8 @@ export const serversApi = {
   reorder: (ids: string[]) => http.put<void>('/servers/order', { ids }),
   hostKey: (id: string) => http.get<HostKeyView>(`/servers/${id}/hostkey`),
   probe: (id: string) => http.post<ProbeServerReport>(`/servers/${id}/probe`),
+  probeDraft: (req: ProbeDraftRequest) =>
+    http.post<ProbeServerReport>('/probe-draft', req),
   session: (id: string) => http.get<SessionState>(`/servers/${id}/session`),
   setEnabled: (id: string, enabled: boolean) =>
     http.post<ServerEnabledResult>(`/servers/${id}/enabled`, { enabled }),

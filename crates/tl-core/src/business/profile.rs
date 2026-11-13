@@ -189,25 +189,60 @@ pub fn import(
         match server.action.as_str() {
             "skip" => {
                 result.skipped += 1;
-                // 整条跳过：它下面的转发不再单独计入（否则界面会显示一串莫名其妙的跳过）
-                result.skipped += server.forwards.len();
-                continue;
+                // 连接本身不导入，但它的转发可能仍要落地：挂到本地同 id 或同名的
+                // 连接上。常见场景——包来自另一台机器，连接已存在，只补转发。
+                // 找不到目标连接时这些转发无处可去，才一并计入跳过。
+                match find_local_server(servers, server) {
+                    Ok(Some(id)) => {
+                        server_ids.insert(server.source_id.clone(), id);
+                    }
+                    Ok(None) => {
+                        result.skipped += server.forwards.len();
+                        continue;
+                    }
+                    Err(e) => {
+                        result.failed.push(ProfileImportFailure {
+                            name: server.name.clone(),
+                            reason: e.to_string(),
+                        });
+                        continue;
+                    }
+                }
             }
-            "overwrite" => match overwrite_server(servers, server) {
-                Ok(id) => {
-                    // 覆盖也计入「写入」：否则界面会显示「0 条连接」，
-                    // 用户会以为覆盖没生效（实际字段在下面一行改了）
-                    result.created_servers += 1;
-                    server_ids.insert(server.source_id.clone(), id);
+            "overwrite" => {
+                let local = match find_local_server(servers, server) {
+                    Ok(Some(id)) => id,
+                    Ok(None) => {
+                        result.failed.push(ProfileImportFailure {
+                            name: server.name.clone(),
+                            reason: "本机没有可覆盖的连接".to_string(),
+                        });
+                        continue;
+                    }
+                    Err(e) => {
+                        result.failed.push(ProfileImportFailure {
+                            name: server.name.clone(),
+                            reason: e.to_string(),
+                        });
+                        continue;
+                    }
+                };
+                match overwrite_server(servers, &local, server) {
+                    Ok(id) => {
+                        // 覆盖也计入「写入」：否则界面会显示「0 条连接」，
+                        // 用户会以为覆盖没生效（实际字段在下面一行改了）
+                        result.created_servers += 1;
+                        server_ids.insert(server.source_id.clone(), id);
+                    }
+                    Err(e) => {
+                        result.failed.push(ProfileImportFailure {
+                            name: server.name.clone(),
+                            reason: e.to_string(),
+                        });
+                        continue;
+                    }
                 }
-                Err(e) => {
-                    result.failed.push(ProfileImportFailure {
-                        name: server.name.clone(),
-                        reason: e.to_string(),
-                    });
-                    continue;
-                }
-            },
+            }
             _ => match create_server(servers, server) {
                 Ok(id) => {
                     result.created_servers += 1;
@@ -268,11 +303,29 @@ fn create_server(servers: &ServerStore, server: &ProfileImportServer) -> Result<
     Ok(dto.id)
 }
 
-fn overwrite_server(servers: &ServerStore, server: &ProfileImportServer) -> Result<String> {
+/// 包里的条目不一定是本机的那一条（来自另一台机器时 id 不同），
+/// 所以先按 id、再按名称找本地对应项。
+fn find_local_server(
+    servers: &ServerStore,
+    server: &ProfileImportServer,
+) -> Result<Option<String>> {
+    let items = servers.list()?.items;
+    Ok(items
+        .iter()
+        .find(|item| item.id == server.source_id)
+        .or_else(|| items.iter().find(|item| item.name == server.name))
+        .map(|item| item.id.clone()))
+}
+
+fn overwrite_server(
+    servers: &ServerStore,
+    local_id: &str,
+    server: &ProfileImportServer,
+) -> Result<String> {
     // 走模型层而非 `business::patch_server`：后者在「只改用户名」时会重建登录材料，
     // 覆盖导入不该动对方的密码与指纹。
     servers.patch(
-        &server.source_id,
+        local_id,
         PatchServerRequest {
             name: Some(server.name.clone()),
             host: Some(server.host.clone()),
@@ -283,7 +336,7 @@ fn overwrite_server(servers: &ServerStore, server: &ProfileImportServer) -> Resu
             ..Default::default()
         },
     )?;
-    Ok(server.source_id.clone())
+    Ok(local_id.to_string())
 }
 
 fn create_forward(
@@ -693,5 +746,60 @@ mod tests {
         assert_eq!(first.created_servers, 0);
         assert_eq!(first.skipped, 2, "连接与其转发都计入跳过");
         assert!(f.servers.list().expect("list").items.is_empty());
+    }
+
+    /// 包来自另一台机器时，连接 id 与本机不同、名字相同。
+    /// 用户对连接选「跳过」、对转发选「新建」——转发必须挂到本机那条连接上。
+    #[test]
+    fn skipped_server_still_imports_its_new_forwards() {
+        let f = fixture("import-skip-server-create-forwards");
+        let local = f
+            .servers
+            .create(CreateServerRequest {
+                name: "y".into(),
+                host: "192.0.2.10".into(),
+                port: 22,
+                credential_id: String::new(),
+                username: "root".into(),
+                kind: Some(CredentialKind::Password),
+                secret: None,
+                passphrase: None,
+                host_key_fingerprint: None,
+                keepalive_secs: 30,
+                enabled: false,
+            })
+            .expect("create local server");
+
+        let result = import(
+            &f.servers,
+            &f.tunnels,
+            ProfileImportRequest {
+                servers: vec![ProfileImportServer {
+                    source_id: "other-machine-id".into(),
+                    name: "y".into(),
+                    host: "192.0.2.10".into(),
+                    port: 22,
+                    username: "root".into(),
+                    credential_kind: CredentialKind::Password,
+                    keepalive_secs: 30,
+                    host_key_fingerprint: None,
+                    action: "skip".into(),
+                    forwards: vec![import_forward("brand-new", 18090, "create")],
+                }],
+                keep_disabled: true,
+            },
+        )
+        .expect("import");
+
+        assert_eq!(result.created_servers, 0, "连接本身没被新建");
+        assert_eq!(result.created_forwards, 1, "转发不该被连接连累");
+        assert_eq!(result.skipped, 1, "只有连接算跳过");
+
+        let forwards = f.tunnels.list().expect("list").items;
+        assert_eq!(forwards.len(), 1);
+        assert_eq!(
+            forwards[0].definition.server_id, local.id,
+            "转发要挂到本机那条同名连接上"
+        );
     }
 }

@@ -74,6 +74,13 @@ export function endpointLabel(view: ForwardLike): string {
     return urlOf(view).replace(/\/$/, '');
   }
   const def = view.definition;
+  // 配了域名时，客户端实际连的是域名（hosts 已把它指向这条转发），
+  // 回环地址只是内部实现，不该出现在卡片上。
+  const domain = (def.domain ?? '').trim();
+  if (domain) {
+    const omit = def.local_port === 80 || def.local_port === 443;
+    return omit ? domain : `${domain}:${def.local_port}`;
+  }
   return `${loopbackHost((def.local_host ?? '').trim())}:${def.local_port}`;
 }
 

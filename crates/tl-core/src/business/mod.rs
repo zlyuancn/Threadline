@@ -15,7 +15,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use tl_protocol::{
     AutostartStatus, CreateCredentialRequest, CreateServerRequest, CreateTunnelRequest,
-    CredentialKind, PatchServerRequest, PatchTunnelRequest, TunnelStatus, WhoamiResponse,
+    CredentialKind, PatchServerRequest, PatchTunnelRequest, ProbeDraftRequest, TunnelStatus,
+    WhoamiResponse,
 };
 use tokio::sync::broadcast;
 
@@ -110,6 +111,45 @@ impl Services {
         }
 
         Ok(report)
+    }
+
+    /// 用还没保存的表单内容试连一次。
+    ///
+    /// 新建连接时用户还没点「保存」，但「测试」不该因此失效。凭据只在本次调用里
+    /// 使用：不落库、不写日志、不留待确认指纹（那属于已保存的连接）。
+    pub async fn probe_draft(
+        &self,
+        draft: &ProbeDraftRequest,
+    ) -> Result<crate::models::tunnel::engine::ProbeReport> {
+        use crate::models::credential::CredentialMaterial;
+        use crate::models::tunnel::engine::{self, ServeConfig};
+        use std::time::Duration;
+
+        if draft.host.trim().is_empty() {
+            anyhow::bail!("先填主机地址");
+        }
+        if draft.secret.trim().is_empty() {
+            anyhow::bail!("先填密码，或粘贴私钥");
+        }
+
+        let login = crate::business::tunnel_runner::to_login(CredentialMaterial {
+            kind: draft.credential_kind,
+            username: draft.username.clone(),
+            secret: draft.secret.clone(),
+            passphrase: draft.passphrase.clone(),
+        });
+
+        let config = ServeConfig {
+            server_host: draft.host.trim().to_string(),
+            server_port: draft.port,
+            // 探测不转发，这两个字段只是结构要求。
+            remote_host: "127.0.0.1".to_string(),
+            remote_port: 0,
+            trusted_fingerprint: draft.host_key_fingerprint.clone(),
+            keepalive_secs: 30,
+        };
+
+        Ok(engine::probe(&config, login, Duration::from_secs(8)).await)
     }
 
     pub fn new(

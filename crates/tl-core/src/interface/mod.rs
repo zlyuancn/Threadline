@@ -20,7 +20,8 @@ use tl_protocol::{
     AcceptHostKeyRequest, AutostartStatus, CreateCredentialRequest, CreateServerRequest,
     CreateTunnelRequest, CredentialList, CredentialSummary, GatewayCaStatus, GatewayTrustResult,
     HealthResponse, HostKeyView, HostsStatus, HostsSyncResult, LogsResponse,
-    PatchCredentialRequest, PatchServerRequest, PatchTunnelRequest, ProbeServerReport,
+    PatchCredentialRequest, PatchServerRequest, PatchTunnelRequest, ProbeDraftRequest,
+    ProbeServerReport,
     ProxySyncResult, ServerDto, ServerEnabledResult, ServerList, SessionClosed, SessionState,
     SetAutostartRequest, SetServerEnabledRequest, ShutdownAccepted, TunnelList, TunnelView,
     WhoamiResponse, API_PREFIX,
@@ -136,6 +137,9 @@ pub fn router(state: Arc<AppState>) -> Router {
             &format!("{API_PREFIX}/servers/{{id}}/probe"),
             post(probe_server),
         )
+        // 放在顶层而不是 /servers 下：`/servers/{id}` 是动态段，同层级再加一个
+        // 静态段会被它抢走（表现为 405 Method Not Allowed）。
+        .route(&format!("{API_PREFIX}/probe-draft"), post(probe_draft))
         .route(
             &format!("{API_PREFIX}/servers/{{id}}/hostkey"),
             get(host_key),
@@ -365,6 +369,19 @@ async fn probe_server(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<ProbeServerReport>, ApiFailure> {
     let report = state.services.probe_server(&id).await?;
+    Ok(Json(ProbeServerReport {
+        stage: report.stage.as_str().to_string(),
+        fingerprint: report.fingerprint,
+        message: report.message,
+    }))
+}
+
+/// 保存前试连：拿请求里的表单值探一次，不落库。
+async fn probe_draft(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ProbeDraftRequest>,
+) -> Result<Json<ProbeServerReport>, ApiFailure> {
+    let report = state.services.probe_draft(&req).await?;
     Ok(Json(ProbeServerReport {
         stage: report.stage.as_str().to_string(),
         fingerprint: report.fingerprint,

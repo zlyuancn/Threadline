@@ -121,6 +121,7 @@ impl HostsSyncService {
             .collect();
         let desired = hosts::render(&existing, &block_entries);
         let pending = desired != existing;
+        let missing = hosts::missing(&existing, &block_entries);
         let elevated = hosts::is_elevated();
         let inner = self.lock();
 
@@ -128,6 +129,7 @@ impl HostsSyncService {
             path: path.display().to_string(),
             managed: entries,
             conflicts,
+            missing,
             needs_elevation: pending && !elevated,
             pending,
             elevated,

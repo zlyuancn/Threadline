@@ -7,6 +7,7 @@ import { forwardBlockedReason } from '../models/forwardStatus';
 import {
   connLabel,
   dotOf,
+  endpointLabel,
   entryLabel,
   isWeb,
   pillOf,
@@ -37,6 +38,8 @@ const forwards = useTunnelsStore();
 const def = computed(() => props.view.definition);
 const state = computed(() => props.view.status.state);
 const web = computed(() => isWeb(props.view as unknown as ForwardLike));
+/** TCP/RDP/SSH 卡片底部那句「用客户端连接 …」——有域名时显示域名 */
+const endpoint = computed(() => endpointLabel(props.view as unknown as ForwardLike));
 const traffic = useTrafficStore();
 const upRate = computed(() => formatRate(traffic.speedOf(props.view.definition.id).up));
 const downRate = computed(() => formatRate(traffic.speedOf(props.view.definition.id).down));
@@ -138,7 +141,7 @@ async function copyUrl() {
       </button>
     </div>
     <div v-else class="tcp-hint">
-      纯 TCP 转发 · 用客户端连接 <span class="mono">127.0.0.1:{{ def.local_port }}</span>
+      纯 TCP 转发 · 用客户端连接 <span class="mono">{{ endpoint }}</span>
     </div>
 
     <div v-if="blocked" class="fcard-reason" :title="blocked">{{ blocked }}</div>

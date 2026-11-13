@@ -66,10 +66,25 @@ const DEFAULT_LOCAL_PORT: Record<Scheme, number | null> = {
   tcp: null,
 };
 
+/** 远端端口的协议默认值：选 RDP 就该是 3389，选 SSH 就该是 22。 */
+const DEFAULT_REMOTE_PORT: Partial<Record<Scheme, number>> = {
+  http: 8080,
+  https: 443,
+  rdp: 3389,
+  ssh: 22,
+};
+
+/** 这些值视为「没改过」，切协议时允许被覆盖；用户填的其它端口一律保留。 */
+const COMMON_REMOTE_PORTS = new Set([22, 80, 443, 3389, 8080]);
+
 function onSchemeChanged(value: Scheme) {
   // 切协议是明确动作：端口必须跟着协议走（HTTP→HTTPS 就是 80→443），
   // 不能因为之前手填过一次就保留旧值，否则 `https://域名:80` 会直接连不上。
   const form = forwardForm.value;
+  const remotePreset = DEFAULT_REMOTE_PORT[value];
+  if (remotePreset !== undefined && COMMON_REMOTE_PORTS.has(form.remote_port)) {
+    form.remote_port = remotePreset;
+  }
   const preset = DEFAULT_LOCAL_PORT[value];
   form.local_port = preset ?? form.remote_port;
 }
@@ -154,7 +169,48 @@ interface TunnelForm {
 
 const tunnelDialog = ref(false);
 const tunnelSaving = ref(false);
+const tunnelTesting = ref(false);
 const tunnelForm = ref<TunnelForm>(emptyTunnel());
+
+/**
+ * 测试连接：依次探 TCP、SSH 握手、认证，把卡在哪一步告诉用户。
+ *
+ * 已保存的连接用后端存的凭据；还没保存的（新建）用表单里的值直接探，
+ * 密码只在这一次调用里用，不落库。
+ */
+async function testTunnel() {
+  const form = tunnelForm.value;
+  if (tunnelTesting.value) {
+    return;
+  }
+  tunnelTesting.value = true;
+  try {
+    const report = form.id
+      ? await tunnels.probeServer(form.id)
+      : await tunnels.probeDraft({
+          host: form.host,
+          port: form.port,
+          username: form.username,
+          credential_kind: form.kind,
+          secret: form.secret,
+          passphrase: form.passphrase === '' ? null : form.passphrase,
+          host_key_fingerprint: null,
+        });
+    if (!report) {
+      ElMessage.error(tunnels.lastError || '测试失败');
+      return;
+    }
+    if (report.stage === 'ok') {
+      ElMessage.success(`连接正常：${report.message}`);
+    } else {
+      ElMessage.warning(report.message);
+    }
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    tunnelTesting.value = false;
+  }
+}
 
 function emptyTunnel(): TunnelForm {
   return {
@@ -418,6 +474,39 @@ interface ForwardForm {
 
 const forwardDialog = ref(false);
 const forwardSaving = ref(false);
+const forwardTesting = ref(false);
+
+/**
+ * 测试连接：确认这条转发所属的服务器能 SSH 登录。
+ *
+ * 远端端口是否可达取决于隧道启动后的实际转发，这里只覆盖「连不上服务器」这一类问题。
+ */
+async function testForward() {
+  const form = forwardForm.value;
+  if (!form.server_id) {
+    ElMessage.info('先选择一条连接');
+    return;
+  }
+  if (forwardTesting.value) {
+    return;
+  }
+  forwardTesting.value = true;
+  try {
+    const report = await tunnels.probeServer(form.server_id);
+    if (!report) {
+      return;
+    }
+    if (report.stage === 'ok') {
+      ElMessage.success(`连接正常：${report.message}`);
+    } else {
+      ElMessage.warning(report.message);
+    }
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    forwardTesting.value = false;
+  }
+}
 const forwardForm = ref<ForwardForm>(emptyForward());
 /** 填了域名就不再由用户决定绑定地址：后端会分配 127.0.0.2–254。 */
 const usesDomain = computed(() => forwardForm.value.domain.trim() !== '');
@@ -1171,10 +1260,15 @@ function tunnelDot(row: { server: { id: string } }): string {
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button size="small" @click="tunnelDialog = false">取消</el-button>
-        <el-button size="small" type="primary" :loading="tunnelSaving" @click="saveTunnel">
-          保存
-        </el-button>
+        <div class="dialog-footer">
+          <el-button size="small" :loading="tunnelTesting" @click="testTunnel">测试连接</el-button>
+          <div>
+            <el-button size="small" @click="tunnelDialog = false">取消</el-button>
+            <el-button size="small" type="primary" :loading="tunnelSaving" @click="saveTunnel">
+              保存
+            </el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
 
@@ -1348,16 +1442,21 @@ function tunnelDot(row: { server: { id: string } }): string {
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button size="small" @click="forwardDialog = false">取消</el-button>
-        <el-button
-          size="small"
-          type="primary"
-          :loading="forwardSaving"
-          :disabled="invalidCombo()"
-          @click="saveForward"
-        >
-          保存
-        </el-button>
+        <div class="dialog-footer">
+          <el-button size="small" :loading="forwardTesting" @click="testForward">测试连接</el-button>
+          <div>
+            <el-button size="small" @click="forwardDialog = false">取消</el-button>
+            <el-button
+              size="small"
+              type="primary"
+              :loading="forwardSaving"
+              :disabled="invalidCombo()"
+              @click="saveForward"
+            >
+              保存
+            </el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
 </template>
@@ -1370,5 +1469,12 @@ function tunnelDot(row: { server: { id: string } }): string {
 .sw {
   appearance: none;
   flex-shrink: 0;
+}
+
+/* 弹窗底部：左边放次要动作（测试连接），右边是取消 / 保存 */
+.dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 </style>

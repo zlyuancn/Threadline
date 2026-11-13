@@ -118,6 +118,18 @@ export interface SessionClosed {
   stopped_forwards: number;
 }
 
+/** 保存前的试连请求：凭据只在本次调用里用，不落库。 */
+export interface ProbeDraftRequest {
+  host: string;
+  port: number;
+  username: string;
+  credential_kind: CredentialKind;
+  /** 密码，或私钥 PEM */
+  secret: string;
+  passphrase?: string | null;
+  host_key_fingerprint?: string | null;
+}
+
 export interface ProbeServerReport {
   /** tcp / ssh / fingerprint / auth / ok */
   stage: string;
@@ -174,6 +186,8 @@ export interface ProxyOverrideStatus {
 export interface HostsStatus {
   path: string;
   managed: ManagedHostEntry[];
+  /** 托管区块里还缺的条目，形如 `127.0.0.28 mypc.zly.m` */
+  missing: string[];
   conflicts: HostsConflict[];
   needs_elevation: boolean;
   pending: boolean;
