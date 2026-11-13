@@ -6,6 +6,10 @@
 架构：模型自组织架构（MSO）
 本地副本：docs/mso/AGENTS.md —— 任何涉及架构的设计、写码、评审前先读它；不要重新联网下载
 来源：https://github.com/zly-app/mso-arch（规则版本：5c432f9，2026-10-19）
+方法论只读引用（升级 = 在下述路径 git pull 后比对版本戳）：
+  C:\my\methodology\mso-arch\                     5c432f9
+  C:\my\methodology\core-agent-wake\              9dcdcec
+  C:\my\methodology\multi-project-workspace\docs\ f78fd6e
 ```
 
 ```
