@@ -498,10 +498,7 @@ mod tests {
     #[test]
     fn credential_choice_never_rebuilds_without_a_new_secret() {
         // 有新材料才重建：否则改端口/备注都会重建凭据，私钥口令会被静默丢掉
-        assert_eq!(
-            credential_choice(true, "cred_1"),
-            CredentialChoice::Rebuild
-        );
+        assert_eq!(credential_choice(true, "cred_1"), CredentialChoice::Rebuild);
         assert_eq!(credential_choice(false, "cred_1"), CredentialChoice::Reuse);
         // 待填凭据没有材料可沿用：只更新字段
         assert_eq!(credential_choice(false, ""), CredentialChoice::Skip);

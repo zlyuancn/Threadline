@@ -2,6 +2,45 @@
 
 > 只增不改。收口时从 `TODO.md` 整条搬入，带完成日期、门禁结果与详情指针。
 
+## 2026-11-13
+
+### 新增：配置导入导出（`.threadline` 包）
+
+**需求**：把一组「隧道 + 转发」分享给团队。只导结构，不含密码/私钥；两级勾选；导入前逐条预览
+新建/跳过/覆盖；图标作为文件随包；主题与快捷键可选导出。设计与计划见
+`docs/plans/2026-11-13-profile-import-export-design.md`、`...-plan.md`。
+
+**改法**：
+- Core：`ServerDto` 增加派生字段 `needs_credential`（`serde(skip)`，列表/创建/编辑/启停四个返回点统一重算）；
+  允许空凭据的连接存在，但拒绝启用与连接，并把「还没填密码」翻成不可重试结局（不进 keeper 退避循环）；
+  新增 `TunnelStore::config_conflict`（配置级端口/域名冲突，与 create/patch 同一套规则）；
+  连接 id 按现有集合去重（中文名 slug 相同不再撞 id）；新增 `POST /profile/plan` 与 `POST /profile/import`。
+- UI：零依赖 ZIP 读写（`src/models/zip.ts`，写 stored、读 stored+deflate，带条目数与总量上限）；
+  `profile.ts` 负责勾选收集、打包、图标校验（128KB）与路径过滤；`preferences.ts` 负责主题/快捷键差异与写回；
+  设置页「隧道顺序」改「隧道管理」，新增导出/导入两个弹窗；侧栏与启停提示补「待填密码」。
+- 覆盖语义：只改名称/主机/端口/用户名/认证方式/保活，**不动 `credential_id` 与 `host_key_fingerprint`**。
+
+**验证**：Rust `cargo test -p tl-core` 164 项、`cargo test -p tl-protocol` 10 项、clippy 通过；
+前端 `vitest` 70 项（新增 zip 5 / profile 13 / preferences 7）、`vue-tsc --noEmit`、`vite build`、
+`msocheck` 通过。TESTPLAN 增 U-16 / U-17。
+
+### 修复：同一条转发在首页卡片与应用磁贴上的默认图标不一致
+
+**用户报**：`mypc远程桌面`（RDP，本机 3389）在首页「端口转发」卡片上是 TCP 的「两条线」图标，
+在「应用」页磁贴上却是显示器图标。
+
+**根因**：协议图标写了两份。`ForwardTile` 有完整的 `Record<LocalScheme, string>`（http/https/ssh/rdp/tcp），
+`ForwardCard` 只有 `web ? 地球 : TCP` 两种兜底——RDP/SSH 一律落成 TCP 图形。
+
+**改法**：
+- `src/models/forwardIcon.ts` 导出唯一的 `PROTOCOL_GLYPHS` / `protocolGlyph(scheme)`，卡片与磁贴同源取图。
+- `ForwardCard` 用 `schemeOf(view)` 决定图标并加 `is-<scheme>` 配色类；`styles.css` 补齐 ssh 青 / rdp 橙 /
+  tcp 中性（web 仍是薄荷），与磁贴同一套语义。
+- 单测 +3：五种协议齐全、rdp/ssh 不与 tcp 共用图形、http 与 https 同图。
+
+**验证**：`vitest` 45 项通过（`forwardIcon` 6 项）、`vue-tsc --noEmit`、`vite build`、`msocheck` 通过；
+Rust 侧无改动故未重跑。
+
 ## 2026-10-20
 
 ### 修复：「启动服务」后隧道显示未连接，其实是**查询失败被当成了没连上**

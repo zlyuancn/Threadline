@@ -115,7 +115,8 @@
 
 ## 续接点（新会话先读这里）
 
-- **仓库**：单仓 `C:\my\threadline`（工作区文档 + `project/threadline`），远端 `git@git.zly.m:zlyuancn/threadline.git`。
+- **仓库**：单仓 `C:\my\threadline`（工作区文档 + `project/threadline`）；原私有远端 `git@git.zly.m:zlyuancn/threadline.git`
+  **自 2026-11-13 起停止推送**（用户改从公共仓库同步），日常只做本地 commit。
 - **测试环境状态**：本机门禁全绿（cargo test 152 项 + agent 6 + frontend 22 + msocheck 44 + clippy + fmt + 构建）；
   两条冒烟脚本（`smoke.ps1` 控制面、`smoke-agent.ps1` 托盘与单实例）——`smoke-wake.ps1` 已随两进程改造删除。
   NSIS 安装包已产出并**实际安装过一次**（`%LOCALAPPDATA%\Threadline\`，两 exe + uninstall）。
@@ -130,6 +131,9 @@
   - 2026-11-12：**域名访问**（用户提出、参考 joyshare）——定为「hosts + 一域名一回环 IP」，
     不做 HTTP 正向代理、不做 SNI 分流、不做 MITM；hosts 写入需 UAC 提权，保存成功即视为成功、
     提权失败留横幅。设计见 `docs/plans/2026-11-12-domain-access-design.md`。
+  - 2026-11-13：**私有远端停止推送**——`git@git.zly.m:zlyuancn/threadline.git` 不再作为推送目标；
+    用户改为从公共仓库同步代码。此后本仓只做本地 commit，AI 会话不得对该远端执行 push；
+    何时与公共仓库对齐、是否重建历史由用户决定。
 
 ## 待确认（2026-10-21 收尾）
 

@@ -781,9 +781,9 @@ fn ensure_unique_in(
     if let Some((kind, name)) = find_conflict(items, candidate, exclude) {
         let (host, port) = effective_addr(candidate);
         return Err(match kind {
-            ConflictKind::Address => anyhow!(
-                "地址 {host}:{port} 已被转发「{name}」占用，换一个端口或域名"
-            ),
+            ConflictKind::Address => {
+                anyhow!("地址 {host}:{port} 已被转发「{name}」占用，换一个端口或域名")
+            }
             ConflictKind::Domain => {
                 anyhow!("域名 {} 已被转发「{name}」占用", candidate.domain)
             }

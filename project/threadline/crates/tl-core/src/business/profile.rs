@@ -384,10 +384,8 @@ mod tests {
     }
 
     fn fixture(tag: &str) -> Fixture {
-        let dir = std::env::temp_dir().join(format!(
-            "threadline-profile-{tag}-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("threadline-profile-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create dir");
         let credentials = Arc::new(CredentialStore::new(dir.join("credentials.dat")));

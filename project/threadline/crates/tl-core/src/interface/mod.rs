@@ -197,10 +197,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             &format!("{API_PREFIX}/gateway/ca/trust-result"),
             post(gateway_trust_result),
         )
-        .route(
-            &format!("{API_PREFIX}/profile/plan"),
-            post(profile_plan),
-        )
+        .route(&format!("{API_PREFIX}/profile/plan"), post(profile_plan))
         .route(
             &format!("{API_PREFIX}/profile/import"),
             post(profile_import),
