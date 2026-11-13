@@ -11,7 +11,8 @@ export interface ForwardStatusLike {
   last_error: string | null;
 }
 
-export interface TunnelLike {
+/** 转发挂在**连接**上：连接没启用时，转发一律起不来。 */
+export interface ServerLike {
   id: string;
   name: string;
   enabled: boolean;
@@ -20,18 +21,18 @@ export interface TunnelLike {
 /**
  * 返回一句人能读懂的原因；没有可解释的阻塞点时返回空串。
  *
- * 优先级：**当前**的阻塞点（隧道没启用）＞ 上次错误。
+ * 优先级：**当前**的阻塞点（连接没启用）＞ 上次错误。
  * 否则会把一条过期错误当成现在的原因——那是另一种撒谎。
  */
 export function forwardBlockedReason(
   status: ForwardStatusLike,
-  tunnel: TunnelLike | undefined,
+  server: ServerLike | undefined,
 ): string {
   if (status.state === 'running') {
     return '';
   }
-  if (tunnel && !tunnel.enabled) {
-    return `隧道「${tunnel.name}」未启用`;
+  if (server && !server.enabled) {
+    return `连接「${server.name}」已断开：转发挂在它上面，先打开上面的连接开关`;
   }
   return status.last_error ?? '';
 }
