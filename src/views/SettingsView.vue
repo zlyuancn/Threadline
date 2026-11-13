@@ -15,15 +15,60 @@ import { useRuntimeStore } from '../models/runtime';
 import { useHotkeyStore } from '../models/hotkey';
 import { useServersStore } from '../models/servers';
 import { THEMES, useThemeStore } from '../models/theme';
+import { useUpdateStore } from '../models/update';
 import { withTimeout } from '../models/asyncAction';
-import { setAutostartElevated, startCore, syncLogonEntry } from '../api/native';
+import {
+  openExternal,
+  setAutostartElevated,
+  startCore,
+  syncLogonEntry,
+} from '../api/native';
 
 const runtime = useRuntimeStore();
 const hotkey = useHotkeyStore();
 const servers = useServersStore();
 const theme = useThemeStore();
+const update = useUpdateStore();
 const saving = ref(false);
 const serviceBusy = ref(false);
+
+/** 由 vite 的 define 注入（package.json 的 version），与界面角落同源。 */
+const appVersion = __APP_VERSION__;
+
+function formatSize(bytes: number): string {
+  if (!bytes) {
+    return '';
+  }
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** 手动检查：有结果才提示，「检查中」的状态由按钮自己显示。 */
+async function checkUpdateNow(): Promise<void> {
+  const found = await update.check();
+  if (update.error) {
+    ElMessage.error(`检查更新失败：${update.error}`);
+    return;
+  }
+  ElMessage.success(found ? `发现新版本 v${update.info?.latest}` : '已是最新版本');
+}
+
+/** 下载 + 安装：装完应用会自己退出，由安装器拉起新版。 */
+async function runUpdate(): Promise<void> {
+  if (update.installerPath) {
+    await update.install();
+    return;
+  }
+  const ok = await update.download();
+  if (!ok) {
+    ElMessage.error(update.error || '下载失败');
+    return;
+  }
+  await update.install();
+}
+
+function openReleasePage(): void {
+  void openExternal('https://github.com/zlyuancn/Threadline/releases/latest');
+}
 
 /** 主题按暗色 / 亮色分组展示。 */
 const themeGroups = [
@@ -863,5 +908,63 @@ async function toggle(enabled: boolean) {
         {{ runtime.degradationLabels().join('；') || '无' }}
       </el-descriptions-item>
     </el-descriptions>
+  </div>
+
+  <div class="panel">
+    <h3 class="panel-title">版本更新</h3>
+    <div class="service-row">
+      <span class="hint" style="margin: 0">
+        当前版本 v{{ appVersion }}
+        <template v-if="update.info"> · 最新 v{{ update.info.latest }}</template>
+      </span>
+      <button
+        class="btn"
+        :disabled="update.checking || update.downloading"
+        @click="checkUpdateNow"
+      >
+        {{ update.checking ? '检查中…' : '检查更新' }}
+      </button>
+    </div>
+
+    <template v-if="update.available">
+      <p class="hint" style="margin: 8px 0 0">
+        发现新版本 <strong>v{{ update.info?.latest }}</strong>
+        <span v-if="update.info?.size"> · {{ formatSize(update.info.size) }}</span>
+      </p>
+      <el-progress
+        v-if="update.downloading"
+        :percentage="update.percent"
+        :stroke-width="6"
+        style="margin-top: 8px"
+      />
+      <div class="service-row" style="margin-top: 8px">
+        <span class="hint" style="margin: 0">
+          {{
+            update.info?.installable
+              ? '下载完成后自动安装并重启'
+              : '当前是开发态，请到发布页手动下载'
+          }}
+        </span>
+        <button
+          v-if="update.info?.installable"
+          class="btn is-primary"
+          :disabled="update.downloading"
+          @click="runUpdate"
+        >
+          {{
+            update.downloading
+              ? '下载中…'
+              : update.installerPath
+                ? '立即安装'
+                : '下载并升级'
+          }}
+        </button>
+        <button v-else class="btn" @click="openReleasePage">打开下载页</button>
+      </div>
+    </template>
+
+    <p v-if="update.error" class="hint" style="color: var(--warn)">
+      {{ update.error }}
+    </p>
   </div>
 </template>

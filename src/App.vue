@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElNotification } from 'element-plus';
 import { useRuntimeStore } from './models/runtime';
 import { useSelectionStore } from './models/selection';
 import { useHotkeyStore } from './models/hotkey';
@@ -10,6 +10,7 @@ import { hostsApi } from './api';
 import type { HostsStatus } from './api/types';
 import { useTunnelsStore } from './models/tunnels';
 import { useServersStore } from './models/servers';
+import { useUpdateStore } from './models/update';
 import {
   coreState,
   fixDataDirAcl,
@@ -39,6 +40,9 @@ const tab = ref<Tab>('apps');
 const runtime = useRuntimeStore();
 const tunnels = useTunnelsStore();
 const servers = useServersStore();
+const update = useUpdateStore();
+/** 启动后的静默更新检查（延迟触发，卸载时要清掉） */
+let updateTimer: number | undefined;
 
 // 心跳只问"隧道状态变了吗、核心还活着吗"——`/tunnels` 是纯内存状态。
 // `/whoami`（身份/运行方式/自启）只在启动、手动刷新、掉线恢复时取，
@@ -523,10 +527,27 @@ onMounted(async () => {
   // 事件流在建好初始数据之后再订阅：先有底图，再谈增量。
   startEventStream();
   timer = window.setTimeout(poll, delay);
+
+  // 启动后延迟查一次版本：不抢首屏；失败静默（内网常不通 GitHub）
+  updateTimer = window.setTimeout(async () => {
+    if (update.autoChecked) {
+      return;
+    }
+    update.autoChecked = true;
+    const found = await update.check();
+    if (found && update.shouldNotify) {
+      ElNotification({
+        title: '发现新版本',
+        message: `v${update.info?.latest} 可用，去「设置 → 版本更新」升级`,
+        duration: 8000,
+      });
+    }
+  }, 8000);
 });
 
 onUnmounted(() => {
   if (timer) window.clearTimeout(timer);
+  if (updateTimer) window.clearTimeout(updateTimer);
   if (pushRefresh !== null) window.clearTimeout(pushRefresh);
   eventStream?.close();
   eventStream = null;

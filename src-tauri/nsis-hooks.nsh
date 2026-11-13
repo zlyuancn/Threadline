@@ -36,6 +36,15 @@
   ${EndIf}
 !macroend
 
+; 静默升级由应用自己发起（下载安装包 → `/S` → 退出）。装完把新版拉起来，
+; 用户看到的才是「点一下，等一会儿，自己回来了」，而不是装着装着窗口消失。
+; 只在静默模式做：交互安装有完成页，用户自己勾「运行」。
+!macro NSIS_HOOK_POSTINSTALL
+  ${If} ${Silent}
+    ExecShell "open" "$INSTDIR\${MAINBINARYNAME}.exe"
+  ${EndIf}
+!macroend
+
 ; 卸载同样会遇到占用：留着文件，卸载器就会提示「稍后重启才能删除」。
 !macro NSIS_HOOK_PREUNINSTALL
   nsExec::ExecToLog 'taskkill /F /IM "${MAINBINARYNAME}.exe" /T'

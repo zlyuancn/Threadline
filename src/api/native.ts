@@ -364,3 +364,53 @@ export async function openProfilePackage(): Promise<{
   }
   return { name: picked.name, bytes: fromBase64(picked.data) };
 }
+
+/* ───────────── 检查更新 / 主动升级 ───────────── */
+
+export interface UpdateInfo {
+  /** 当前运行的版本 */
+  current: string;
+  /** GitHub Releases 上的最新版本（已去掉 `v`） */
+  latest: string;
+  available: boolean;
+  /** Release 正文（Markdown 原文） */
+  notes: string;
+  /** 安装包下载地址；没有对应资产时为空串 */
+  url: string;
+  size: number;
+  /** 当前是否安装版：开发态为 false，只能跳下载页 */
+  installable: boolean;
+}
+
+/** 查最新版本。网络不通会抛错，调用方决定是否静默。 */
+export async function checkUpdate(): Promise<UpdateInfo> {
+  return invoke<UpdateInfo>('check_update');
+}
+
+/** 下载安装包到临时目录，返回落地路径。进度走 `update:progress` 事件。 */
+export async function downloadUpdate(url: string, version: string): Promise<string> {
+  return invoke<string>('download_update', { url, version });
+}
+
+/** 启动安装器并让应用退出（退出由 Rust 侧延迟执行）。 */
+export async function installUpdate(path: string): Promise<void> {
+  await invoke('install_update', { path });
+}
+
+/**
+ * 订阅下载进度（已下载字节 / 总字节），返回取消订阅函数。
+ *
+ * 事件名与 Rust 侧 `app.emit("update:progress", (written, total))` 对齐。
+ */
+export async function onUpdateProgress(
+  handler: (downloaded: number, total: number) => void,
+): Promise<() => void> {
+  if (!isTauri()) {
+    return () => undefined;
+  }
+  const { listen } = await import('@tauri-apps/api/event');
+  const unlisten = await listen<[number, number]>('update:progress', (event) => {
+    handler(event.payload[0], event.payload[1]);
+  });
+  return unlisten;
+}

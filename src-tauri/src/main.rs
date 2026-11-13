@@ -1025,6 +1025,186 @@ async fn open_profile_package() -> Result<Option<ProfilePackage>, String> {
     .map_err(|e| format!("打开对话框失败：{e}"))?
 }
 
+/* ───────────── 检查更新 / 主动升级 ───────────── */
+
+const UPDATE_REPO: &str = "zlyuancn/Threadline";
+
+/// 更新信息：由 GitHub Releases 的 `latest` 接口拼出来。
+#[derive(serde::Serialize)]
+struct UpdateInfo {
+    current: String,
+    latest: String,
+    available: bool,
+    /// Release 正文（Markdown 原文），界面按纯文本展示
+    notes: String,
+    /// `*_x64-setup.exe` 的下载地址
+    url: String,
+    size: u64,
+    /// 当前进程是否处于「已安装」状态：开发态只能跳转下载页，不能一键装
+    installable: bool,
+}
+
+/// 逐段比数字：`0.10.0` 必须大于 `0.9.9`，按字符串比会判反。
+fn version_is_newer(candidate: &str, current: &str) -> bool {
+    let parse = |text: &str| -> Vec<u64> {
+        text.trim_start_matches(['v', 'V'])
+            .split(['.', '-', '+'])
+            .map(|part| part.parse::<u64>().unwrap_or(0))
+            .collect()
+    };
+    let (a, b) = (parse(candidate), parse(current));
+    for i in 0..a.len().max(b.len()) {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
+/// 安装目录。判定依据是同目录有 NSIS 生成的 `uninstall.exe`——
+/// 开发态 `target\debug` 没有，因此不会被误判成「可以就地升级」。
+fn install_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?.to_path_buf();
+    if dir.join("uninstall.exe").exists() {
+        Some(dir)
+    } else {
+        None
+    }
+}
+
+/// 查 GitHub Releases 的最新版。失败时返回 `Err`，由前端决定是否弹提示。
+///
+/// 没有 token：公开仓的 `latest` 接口未认证也能用（每小时 60 次，
+/// 启动时一次 + 手动点击，远够）。
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<UpdateInfo, String> {
+    let current = app.package_info().version.to_string();
+    let installable = install_dir().is_some();
+    let url = format!("https://api.github.com/repos/{UPDATE_REPO}/releases/latest");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let body: serde_json::Value = ureq::get(&url)
+            .set("User-Agent", "Threadline-Updater")
+            .set("Accept", "application/vnd.github+json")
+            .timeout(Duration::from_secs(12))
+            .call()
+            .map_err(|e| format!("请求失败：{e}"))?
+            .into_json()
+            .map_err(|e| format!("响应解析失败：{e}"))?;
+
+        let latest = body
+            .get("tag_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim_start_matches(['v', 'V'])
+            .to_string();
+        if latest.is_empty() {
+            return Err("响应里没有版本号".to_string());
+        }
+
+        // 只认 NSIS 安装包：便携包解压即用，没法覆盖正在运行的文件
+        let asset = body
+            .get("assets")
+            .and_then(|v| v.as_array())
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("name")
+                        .and_then(|n| n.as_str())
+                        .is_some_and(|n| n.ends_with("-setup.exe"))
+                })
+            });
+        let url = asset
+            .and_then(|a| a.get("browser_download_url"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let size = asset
+            .and_then(|a| a.get("size"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        Ok(UpdateInfo {
+            available: version_is_newer(&latest, &current),
+            notes: body
+                .get("body")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            current,
+            latest,
+            url,
+            size,
+            installable,
+        })
+    })
+    .await
+    .map_err(|e| format!("检查更新失败：{e}"))?
+}
+
+/// 下载安装包到 `%TEMP%`，边下边发 `update:progress`（已下载字节 / 总字节）。
+#[tauri::command]
+async fn download_update(app: AppHandle, url: String, version: String) -> Result<String, String> {
+    let target = std::env::temp_dir().join(format!("Threadline-{version}-setup.exe"));
+
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::{Read, Write};
+
+        let resp = ureq::get(&url)
+            .set("User-Agent", "Threadline-Updater")
+            .timeout(Duration::from_secs(600))
+            .call()
+            .map_err(|e| format!("下载失败：{e}"))?;
+        let total: u64 = resp
+            .header("Content-Length")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+
+        let mut reader = resp.into_reader();
+        let mut file = std::fs::File::create(&target).map_err(|e| format!("建文件失败：{e}"))?;
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut written: u64 = 0;
+        loop {
+            let n = reader.read(&mut buf).map_err(|e| format!("读取失败：{e}"))?;
+            if n == 0 {
+                break;
+            }
+            file.write_all(&buf[..n])
+                .map_err(|e| format!("写入失败：{e}"))?;
+            written += n as u64;
+            // 失败（窗口已关）不算错误，下载继续
+            let _ = app.emit("update:progress", (written, total));
+        }
+        Ok::<String, String>(target.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| format!("下载任务失败：{e}"))?
+}
+
+/// 启动安装器并退出：静默安装（`/S`），装完由 NSIS 的 POSTINSTALL 重新拉起应用。
+///
+/// `/D=` 必须是最后一个参数，且 NSIS 不认带引号的写法——用 `raw_arg` 绕开
+/// `Command` 的自动加引号，否则路径带空格时会被解析成一堆碎片参数。
+#[tauri::command]
+async fn install_update(app: AppHandle, path: String) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+
+    let dir = install_dir().ok_or("当前不是安装版，无法自动升级")?;
+    let mut cmd = std::process::Command::new(&path);
+    cmd.raw_arg("/S");
+    cmd.raw_arg(format!("/D={}", dir.display()));
+    cmd.spawn().map_err(|e| format!("启动安装器失败：{e}"))?;
+
+    // 给安装器一点时间接管，再退出；hook 会结束残留的 tl-core
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1500));
+        app.exit(0);
+    });
+    Ok(())
+}
+
 /// 找到同目录下的 `tl-core.exe`（安装后两者同处一个目录）。
 ///
 /// 开发态额外允许 `<repo>/target/debug/tl-core.exe` 兜底。这条分支**只在 debug
@@ -1548,6 +1728,9 @@ fn main() {
             export_gateway_ca,
             save_profile_package,
             open_profile_package,
+            check_update,
+            download_update,
+            install_update,
             sync_logon_entry,
             hotkey::get_hotkey,
             hotkey::set_hotkey,
