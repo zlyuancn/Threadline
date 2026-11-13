@@ -4,6 +4,20 @@
 
 ## 2026-11-13
 
+### 发布：v0.2.1
+
+- **内容**：检查更新与主动升级（`check_update` / `download_update` / `install_update`，静默安装后由
+  NSIS `POSTINSTALL` 拉起新版）；域名入口的 HTTP 头改写（上行 `Host` 换成转发里填的远端地址、
+  下行 `Location` 换回 https）；再次唤起（托盘 / 热键 / 双击）回到「应用」页。
+- **历史形态修正**：`scripts/release.ps1` 原来用 `git commit-tree` 造**孤儿提交**，每次发版强推后
+  远端只剩一个 commit，看不出任何演进。已改为推完整历史：以 `v0.1.0`（`6868a52`）为基线构造根
+  提交（`24075c4`），把之后的 19 个提交逐个重放（`git rebase --onto`），`git diff` 与重写前为空。
+  远端 `main` 现为完整历史，`v0.2.1` tag 指向 `cb51ac8`。脚本的 `-DryRun` 输出同步更新。
+- **本地部署**：`d:\ruanjian\threadline` 静默安装到 0.2.1，`FileVersion = 0.2.1`，进程正常。
+- **未验证**：GitHub Actions 出包状态。本机到 `api.github.com` 的通道中断（代理返回 000、
+  直连同样失败；而 `baidu` 经代理 200、SSH 推送 `20.205.243.166` 正常）。CI 由 GitHub 侧执行，
+  不受本地网络影响，恢复后可在 Actions 页确认。
+
 ### 重构：仓库布局扁平化（去掉 `project/` 中间层）
 
 - **背景**：工作区根本该是「各项目独立仓库并列」，但 threadline 被放进 `project/threadline/`，
