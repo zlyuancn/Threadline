@@ -287,7 +287,18 @@ async fn set_server_enabled(
     AxumPath(id): AxumPath<String>,
     Json(req): Json<SetServerEnabledRequest>,
 ) -> Result<Json<ServerEnabledResult>, ApiFailure> {
-    let affected = state.services.set_server_enabled(&id, req.enabled).await?;
+    let affected = state
+        .services
+        .set_server_enabled(&id, req.enabled)
+        .await
+        .map_err(|e| {
+            // 专门给界面一个可识别的码：它要提示「先填密码」，而不是弹红色错误横幅。
+            if e.to_string().contains("还没填密码") {
+                ApiFailure::conflict("credential_missing", e.to_string())
+            } else {
+                ApiFailure::from(e)
+            }
+        })?;
     let connected = state.services.session_connected(&id);
     if !req.enabled {
         return Ok(Json(ServerEnabledResult {

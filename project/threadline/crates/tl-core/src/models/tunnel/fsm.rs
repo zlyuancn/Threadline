@@ -27,6 +27,11 @@ pub enum TunnelEvent {
     HandshakeFailed { reason: String },
     /// 认证失败（密钥被拒 / 密码错误 / 服务器不允许该方式）——不可自动重试。
     AuthFailed { reason: String },
+    /// 这条连接还没有登录材料（导入的分享包）。
+    ///
+    /// 与认证失败分开：这里根本还没尝试认证，重试没有意义，
+    /// 只会让界面挂着一串"正在重连"的假象。
+    CredentialMissing { reason: String },
     /// 主机密钥与本机记录不一致——**绝不自动接受**，直接进错误态等人工处理。
     FingerprintMismatch { trusted: String, observed: String },
     /// 网络中断或 keepalive 超时。
@@ -78,6 +83,7 @@ pub fn next_state(from: TunnelState, event: &TunnelEvent) -> Result<TunnelState,
         (S::Connecting, E::BindFailed { .. }) => S::Error,
         (S::Connecting, E::HandshakeFailed { .. }) => S::Error,
         (S::Connecting, E::AuthFailed { .. }) => S::Error,
+        (S::Connecting, E::CredentialMissing { .. }) => S::Error,
         (S::Connecting, E::FingerprintMismatch { .. }) => S::Error,
         (S::Connecting, E::HandshakeNeedsTrust) => S::NeedsTrust,
         (S::Connecting, E::HandshakeOk) => S::Running,
@@ -141,6 +147,7 @@ mod tests {
             E::HandshakeNeedsTrust,
             E::HandshakeFailed { reason: "x".into() },
             E::AuthFailed { reason: "x".into() },
+            E::CredentialMissing { reason: "x".into() },
             E::NetworkLost,
             E::BackoffElapsed,
             E::RetryExhausted,

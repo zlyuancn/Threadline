@@ -17,9 +17,8 @@ import {
   schemeOf,
   urlOf,
   type ForwardLike,
-  type LocalScheme,
 } from '../models/forwardView';
-import { useForwardIcon } from '../models/forwardIcon';
+import { protocolGlyph, useForwardIcon } from '../models/forwardIcon';
 import { openExternal } from '../api/native';
 import type { TunnelView } from '../api/types';
 
@@ -53,15 +52,7 @@ const blocked = computed(() => forwardBlockedReason(props.view.status, props.ser
 /** 图标优先级：用户自定义 → 站点 favicon（仅运行中）→ 协议图标；规则与卡片共用。 */
 const { src: iconSrc, broken: iconBroken } = useForwardIcon(() => props.view, () => clickable.value);
 
-const ICONS: Record<LocalScheme, string> = {
-  http: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2 3 4.3 3 7s-1 5-3 7c-2-2-3-4.3-3-7s1-5 3-7z"/></svg>',
-  https: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2 3 4.3 3 7s-1 5-3 7c-2-2-3-4.3-3-7s1-5 3-7z"/></svg>',
-  ssh: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="15" height="13" rx="2.5"/><path d="M6 8l2.6 2.4L6 12.8M10.8 13h3.4"/></svg>',
-  rdp: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="15" height="10.5" rx="2"/><path d="M7 17h6M10 14v3"/></svg>',
-  tcp: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7h13M3.5 13h13"/><circle cx="7.5" cy="7" r="1.8"/><circle cx="12.5" cy="13" r="1.8"/></svg>',
-};
-
-const icon = computed(() => ICONS[scheme.value]);
+const icon = computed(() => protocolGlyph(scheme.value));
 
 const addressTitle = computed(() => {
   if (!openable.value) {

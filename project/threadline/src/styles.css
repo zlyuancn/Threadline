@@ -1618,6 +1618,19 @@ kbd {
   height: 16px;
 }
 
+/* 配色随协议走，与应用页磁贴同一套语义：web 薄荷、ssh 青、rdp 橙、tcp 中性 */
+.fcard-icon.is-ssh {
+  color: var(--cyan);
+}
+
+.fcard-icon.is-rdp {
+  color: var(--warn);
+}
+
+.fcard-icon.is-tcp {
+  color: var(--text-2);
+}
+
 /* 站点自己的图标自带底色，再套一层描边只会显得脏 */
 .fcard-icon.has-image {
   border-color: transparent;

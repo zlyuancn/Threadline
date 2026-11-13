@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveIconSrc } from './forwardIcon';
+import { PROTOCOL_GLYPHS, protocolGlyph, resolveIconSrc } from './forwardIcon';
 
 const FAVICON = 'https://example.com/favicon.ico';
 
@@ -25,5 +25,26 @@ describe('forwardIcon', () => {
     expect(resolveIconSrc(undefined, true, false, FAVICON)).toBe('');
     // 非 web 没有 favicon 这个概念
     expect(resolveIconSrc(undefined, false, true, '')).toBe('');
+  });
+});
+
+describe('protocolGlyph', () => {
+  it('covers every protocol the UI accepts', () => {
+    // 卡片与磁贴共用这张表：漏一个协议，那一类转发就会退回别的图标
+    expect(Object.keys(PROTOCOL_GLYPHS).sort()).toEqual(['http', 'https', 'rdp', 'ssh', 'tcp']);
+    for (const glyph of Object.values(PROTOCOL_GLYPHS)) {
+      expect(glyph.startsWith('<svg')).toBe(true);
+    }
+  });
+
+  it('draws rdp and ssh differently from a bare tcp forward', () => {
+    // RDP 必须是显示器：和 tcp 共用「两条线」正是首页与磁贴图标打架的原因
+    expect(protocolGlyph('rdp')).not.toBe(protocolGlyph('tcp'));
+    expect(protocolGlyph('ssh')).not.toBe(protocolGlyph('tcp'));
+    expect(protocolGlyph('rdp')).not.toBe(protocolGlyph('ssh'));
+  });
+
+  it('uses the same glyph for plain http and https', () => {
+    expect(protocolGlyph('https')).toBe(protocolGlyph('http'));
   });
 });

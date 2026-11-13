@@ -499,6 +499,48 @@ impl TunnelStore {
             .any(|(_, p)| *p == port)
     }
 
+    /// 配置级冲突：返回（冲突类型, 占用者名称）。
+    ///
+    /// 与 `is_port_taken` 的区别：那个查的是**运行期**监听表、不分 host，
+    /// 只能回答"现在能不能 bind"，不能回答"配置里是否已经有一条"。
+    /// 导入预判与 `create`/`patch` 共用同一套判定，避免预览与落地各说各话。
+    pub fn config_conflict(
+        &self,
+        local_host: &str,
+        local_port: u16,
+        domain: &str,
+        exclude_id: Option<&str>,
+    ) -> Result<Option<(ConflictKind, String)>> {
+        let domain = validate_domain(domain)?;
+        let file = self.load()?;
+        let domain_host = if domain.is_empty() {
+            String::new()
+        } else {
+            // 与 create 相同的分配规则：模拟"新加一条"，域名入口会拿到一个新的回环地址。
+            allocate_domain_host(&file.items, exclude_id)?
+        };
+        let candidate = TunnelDto {
+            id: String::new(),
+            name: String::new(),
+            server_id: String::new(),
+            local_host: local_host.to_string(),
+            local_port,
+            remote_host: String::new(),
+            remote_port: 1,
+            auto_start: false,
+            note: String::new(),
+            open_path: String::new(),
+            scheme: "tcp".to_string(),
+            domain,
+            domain_host,
+            remote_scheme: None,
+            icon: String::new(),
+            group: String::new(),
+            in_app: true,
+        };
+        Ok(find_conflict(&file.items, &candidate, exclude_id))
+    }
+
     /// 记一条**不改变状态**的错误（例如某次转发连接失败）。
     ///
     /// 这类错误不该把整条隧道打回 Stopped——会话还是好的，只是某个目标连不上；
@@ -699,6 +741,35 @@ fn retry_hint(event: &TunnelEvent) -> Option<u64> {
     }
 }
 
+/// 冲突类型：界面据此显示「端口被占」还是「域名被占」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictKind {
+    Address,
+    Domain,
+}
+
+/// 唯一性判定的核心：返回第一个冲突的（类型, 占用者名称）。
+fn find_conflict(
+    items: &[TunnelDto],
+    candidate: &TunnelDto,
+    exclude: Option<&str>,
+) -> Option<(ConflictKind, String)> {
+    let (host, port) = effective_addr(candidate);
+    for other in items {
+        if Some(other.id.as_str()) == exclude {
+            continue;
+        }
+        let (other_host, other_port) = effective_addr(other);
+        if other_host == host && other_port == port {
+            return Some((ConflictKind::Address, other.name.clone()));
+        }
+        if !candidate.domain.is_empty() && other.domain == candidate.domain {
+            return Some((ConflictKind::Domain, other.name.clone()));
+        }
+    }
+    None
+}
+
 /// 唯一性：监听地址与域名都不能撞。
 ///
 /// 错误文案保留「已被…占用」——接口层用 `message.contains("已被")` 判 409。
@@ -707,25 +778,16 @@ fn ensure_unique_in(
     candidate: &TunnelDto,
     exclude: Option<&str>,
 ) -> Result<()> {
-    let (host, port) = effective_addr(candidate);
-    for other in items {
-        if Some(other.id.as_str()) == exclude {
-            continue;
-        }
-        let (other_host, other_port) = effective_addr(other);
-        if other_host == host && other_port == port {
-            return Err(anyhow!(
-                "地址 {host}:{port} 已被转发「{}」占用，换一个端口或域名",
-                other.name
-            ));
-        }
-        if !candidate.domain.is_empty() && other.domain == candidate.domain {
-            return Err(anyhow!(
-                "域名 {} 已被转发「{}」占用",
-                candidate.domain,
-                other.name
-            ));
-        }
+    if let Some((kind, name)) = find_conflict(items, candidate, exclude) {
+        let (host, port) = effective_addr(candidate);
+        return Err(match kind {
+            ConflictKind::Address => anyhow!(
+                "地址 {host}:{port} 已被转发「{name}」占用，换一个端口或域名"
+            ),
+            ConflictKind::Domain => {
+                anyhow!("域名 {} 已被转发「{name}」占用", candidate.domain)
+            }
+        });
     }
     Ok(())
 }
@@ -1206,6 +1268,42 @@ mod tests {
             .create(create_req("a", &f.server_id, 18080))
             .expect("create");
         assert_eq!(status.state, TunnelState::Stopped);
+    }
+
+    #[test]
+    fn config_conflict_matches_what_create_would_reject() {
+        let f = fixture("config-conflict");
+        f.tunnels
+            .create(create_req("a", &f.server_id, 18080))
+            .expect("a");
+        let mut with_domain = create_req("b", &f.server_id, 18081);
+        with_domain.domain = "a.example.com".into();
+        f.tunnels.create(with_domain).expect("b");
+
+        // 端口占用：返回占用者名称，供界面显示「已被 a 占用」
+        assert_eq!(
+            f.tunnels
+                .config_conflict("127.0.0.1", 18080, "", None)
+                .unwrap(),
+            Some((ConflictKind::Address, "a".to_string()))
+        );
+
+        // 域名占用
+        assert_eq!(
+            f.tunnels
+                .config_conflict("127.0.0.1", 18099, "a.example.com", None)
+                .unwrap(),
+            Some((ConflictKind::Domain, "b".to_string()))
+        );
+
+        // 编辑自己不算冲突
+        let id = f.tunnels.list().unwrap().items[0].definition.id.clone();
+        assert_eq!(
+            f.tunnels
+                .config_conflict("127.0.0.1", 18080, "", Some(&id))
+                .unwrap(),
+            None
+        );
     }
 
     #[test]

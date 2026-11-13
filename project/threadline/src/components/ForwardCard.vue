@@ -10,11 +10,12 @@ import {
   entryLabel,
   isWeb,
   pillOf,
+  schemeOf,
   urlOf,
   type ForwardLike,
 } from '../models/forwardView';
 import { formatRate, useTrafficStore } from '../models/traffic';
-import { useForwardIcon } from '../models/forwardIcon';
+import { protocolGlyph, useForwardIcon } from '../models/forwardIcon';
 import { openExternal } from '../api/native';
 import type { TunnelView } from '../api/types';
 
@@ -40,6 +41,10 @@ const traffic = useTrafficStore();
 const upRate = computed(() => formatRate(traffic.speedOf(props.view.definition.id).up));
 const downRate = computed(() => formatRate(traffic.speedOf(props.view.definition.id).down));
 
+/** 协议决定回退图标与配色，和「应用」页磁贴同一套（见 models/forwardIcon）。 */
+const scheme = computed(() => schemeOf(props.view as unknown as ForwardLike));
+const glyph = computed(() => protocolGlyph(scheme.value));
+
 /** 图标规则与「应用」页磁贴共用：自定义 → 站点 favicon（运行中）→ 协议图标。 */
 const { src: iconSrc, broken: iconBroken } = useForwardIcon(
   () => props.view,
@@ -64,11 +69,6 @@ async function copyUrl() {
     ElMessage.error('复制失败，请手动选中地址');
   }
 }
-
-const ICON_WEB =
-  '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c1.6 1.6 2.4 3.5 2.4 5.5S9.6 12 8 13.5C6.4 12 5.6 10 5.6 8s.8-3.9 2.4-5.5z"/></svg>';
-const ICON_TCP =
-  '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5.5h10M3 10.5h10"/><circle cx="6" cy="5.5" r="1.5"/><circle cx="10" cy="10.5" r="1.5"/></svg>';
 </script>
 
 <template>
@@ -95,9 +95,9 @@ const ICON_TCP =
     </div>
 
     <div class="fcard-id">
-      <div class="fcard-icon" :class="{ 'has-image': iconSrc }">
+      <div class="fcard-icon" :class="[`is-${scheme}`, { 'has-image': iconSrc }]">
         <img v-if="iconSrc" :src="iconSrc" alt="" @error="iconBroken = true" />
-        <span v-else v-html="web ? ICON_WEB : ICON_TCP" />
+        <span v-else class="fcard-glyph" v-html="glyph" />
       </div>
       <div class="fcard-idtext">
         <div class="fcard-name">

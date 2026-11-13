@@ -215,6 +215,12 @@ pub struct ServerDto {
     /// 所以把原因一起带到列表里。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_error: Option<String>,
+    /// 还没有登录材料（导入分享包后的初始状态）。
+    ///
+    /// 由 `credential_id` 是否为空派生：**不落盘**（`skip`），每次返回前重算。
+    /// 落盘会让磁盘上的旧值盖住派生结果——填完密码后界面仍显示「待填」。
+    #[serde(skip)]
+    pub needs_credential: bool,
 }
 
 /// 调整隧道显示顺序。
@@ -596,6 +602,176 @@ impl ErrorBody {
             },
         }
     }
+}
+
+// ─────────────────────── 配置导入导出 ───────────────────────
+
+/// 分享包里的一条转发：是 `TunnelDto` 的**可分享子集**。
+///
+/// 不带 `server_id`（靠嵌套关系挂在连接下）、不带 `domain_host`（本机派生的回环地址）、
+/// `icon` 是包内相对路径而不是 data URI。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileForward {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_local_host")]
+    pub local_host: String,
+    pub local_port: u16,
+    pub remote_host: String,
+    pub remote_port: u16,
+    #[serde(default = "default_scheme")]
+    pub scheme: String,
+    #[serde(default)]
+    pub domain: String,
+    /// 远端实际协议。漏了它，`https` + 远端 `http` 的本地 TLS 终止会退化成透传。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_scheme: Option<String>,
+    #[serde(default)]
+    pub open_path: String,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub group: String,
+    #[serde(default = "default_true")]
+    pub in_app: bool,
+    #[serde(default)]
+    pub auto_start: bool,
+}
+
+/// 分享包里的一条连接。**不含密码/私钥**，也不含 `credential_id`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileServer {
+    pub id: String,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default = "default_credential_kind")]
+    pub credential_kind: CredentialKind,
+    #[serde(default = "default_keepalive")]
+    pub keepalive_secs: u32,
+    /// 分享者已信任的主机指纹；导入方可以选择重新确认。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_key_fingerprint: Option<String>,
+    #[serde(default)]
+    pub forwards: Vec<ProfileForward>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfilePlanRequest {
+    pub servers: Vec<ProfileServer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfilePlan {
+    pub servers: Vec<PlannedServer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlannedServer {
+    pub index: usize,
+    pub name: String,
+    /// `ok` / `exists`（同 id）/ `name_taken` / `invalid`
+    pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// 重名时建议的新名字（如「mypc (2)」），界面可直接采用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_name: Option<String>,
+    pub forwards: Vec<PlannedForward>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlannedForward {
+    pub index: usize,
+    pub name: String,
+    /// `ok` / `exists` / `name_taken` / `port_taken` / `domain_taken` / `invalid`
+    pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// 端口/域名被谁占：界面显示「本机 3389 已被 mypc远程桌面 占用」。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occupied_by: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileImportRequest {
+    pub servers: Vec<ProfileImportServer>,
+    /// 导入后保持停用。**缺省必须为 true**：漏传不能变成"导入即启用"，
+    /// 否则没密码的连接会被 keeper 反复重连。
+    #[serde(default = "default_true")]
+    pub keep_disabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileImportServer {
+    /// 包里的 id，用来识别「同一条」。
+    pub source_id: String,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default = "default_credential_kind")]
+    pub credential_kind: CredentialKind,
+    #[serde(default = "default_keepalive")]
+    pub keepalive_secs: u32,
+    /// 仅 `action = create` 时采用；覆盖时忽略（不改写对方的安全状态）。
+    #[serde(default)]
+    pub host_key_fingerprint: Option<String>,
+    /// `create` / `overwrite` / `skip`
+    pub action: String,
+    #[serde(default)]
+    pub forwards: Vec<ProfileImportForward>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileImportForward {
+    pub name: String,
+    #[serde(default = "default_local_host")]
+    pub local_host: String,
+    pub local_port: u16,
+    pub remote_host: String,
+    pub remote_port: u16,
+    #[serde(default = "default_scheme")]
+    pub scheme: String,
+    #[serde(default)]
+    pub domain: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_scheme: Option<String>,
+    #[serde(default)]
+    pub open_path: String,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub group: String,
+    #[serde(default = "default_true")]
+    pub in_app: bool,
+    #[serde(default)]
+    pub auto_start: bool,
+    /// 前端已从包里读出的图标（data URI）；空 = 不带。
+    #[serde(default)]
+    pub icon: String,
+    /// `create` / `overwrite` / `skip`
+    pub action: String,
+    /// 覆盖时按此 id 找现有转发。
+    #[serde(default)]
+    pub target_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileImportResult {
+    pub created_servers: usize,
+    pub created_forwards: usize,
+    pub skipped: usize,
+    pub failed: Vec<ProfileImportFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileImportFailure {
+    pub name: String,
+    pub reason: String,
 }
 
 // ─────────────────────── 磁盘文件契约 ───────────────────────
@@ -982,6 +1158,8 @@ mod tests {
                 keepalive_secs: 30,
                 enabled: false,
                 session_error: None,
+                // skip 字段：落盘时丢弃，读回来必然是 false
+                needs_credential: false,
             }],
         };
         assert_eq!(
@@ -998,6 +1176,43 @@ mod tests {
             install,
             serde_json::from_str::<InstallInfo>(&serde_json::to_string(&install).unwrap()).unwrap()
         );
+    }
+
+    #[test]
+    fn needs_credential_is_derived_not_persisted() {
+        // 它是从 credential_id 派生的：一旦落盘，磁盘上的旧值就会盖住派生结果
+        let dto = ServerDto {
+            id: "srv_1".into(),
+            name: "web-01".into(),
+            host: "192.0.2.90".into(),
+            port: 22,
+            credential_id: String::new(),
+            username: "root".into(),
+            credential_kind: CredentialKind::Password,
+            host_key_fingerprint: None,
+            keepalive_secs: 30,
+            enabled: false,
+            session_error: None,
+            needs_credential: true,
+        };
+        let text = serde_json::to_string(&dto).unwrap();
+        assert!(!text.contains("needs_credential"), "{text}");
+    }
+
+    #[test]
+    fn profile_dtos_tolerate_missing_optional_fields() {
+        // 包可能来自旧版本：缺 open_path / remote_scheme / group 时必须还能读
+        let f: ProfileForward = serde_json::from_str(
+            r#"{"id":"f1","name":"rdp","local_port":3389,"remote_host":"h","remote_port":3389}"#,
+        )
+        .unwrap();
+        assert_eq!(f.scheme, "tcp");
+        assert_eq!(f.local_host, "127.0.0.1");
+        assert!(f.remote_scheme.is_none());
+
+        // keep_disabled 缺省必须为 true（漏传不能变成"导入即启用"）
+        let req: ProfileImportRequest = serde_json::from_str(r#"{"servers":[]}"#).unwrap();
+        assert!(req.keep_disabled);
     }
 
     #[test]

@@ -46,6 +46,30 @@ fn inline_credential_name(server_name: &str) -> String {
     format!("__inline_{server_name}")
 }
 
+/// 编辑连接时对登录材料的处理方式。
+///
+/// 抽成纯函数是为了能单独测：这里判错会「每次改端口都重建凭据」，
+/// 私钥口令会被静默丢掉。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CredentialChoice {
+    /// 给了新的密码/私钥：建新材料并切过去
+    Rebuild,
+    /// 没给新密钥，但已有材料：沿用原密钥（只改用户名）
+    Reuse,
+    /// 待填凭据且没给密钥：只更新字段，不碰材料
+    Skip,
+}
+
+fn credential_choice(has_new_secret: bool, credential_id: &str) -> CredentialChoice {
+    if has_new_secret {
+        CredentialChoice::Rebuild
+    } else if credential_id.trim().is_empty() {
+        CredentialChoice::Skip
+    } else {
+        CredentialChoice::Reuse
+    }
+}
+
 impl Services {
     /// 试连一次：回答"这条隧道配置真的连得上吗"。
     ///
@@ -272,9 +296,23 @@ impl Services {
                 .into_iter()
                 .find(|s| s.id == id)
                 .ok_or_else(|| anyhow!("服务器不存在：{id}"))?;
+            let has_new_secret = secret
+                .as_deref()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+
+            // 待填凭据（导入的连接还没有密码）且这次没给新密钥：只更新字段。
+            // 既不能去读原材料（credential_id 是空的），也不能凭空造一条空凭据。
+            // username/kind 已被 take()，必须放回去，否则改名会静默失效。
+            if credential_choice(has_new_secret, &current.credential_id) == CredentialChoice::Skip {
+                req.username = username;
+                req.kind = kind;
+                return self.servers.patch(id, req);
+            }
+
             let login_user = username.unwrap_or_else(|| current.username.clone());
-            let material = if let Some(secret) = secret.filter(|s| !s.trim().is_empty()) {
-                secret
+            let material = if has_new_secret {
+                secret.unwrap_or_default()
             } else {
                 // 只改用户名：沿用原密钥。
                 self.credentials.material(&current.credential_id)?.secret
@@ -427,5 +465,24 @@ impl Services {
 
     pub async fn stop_tunnel(&self, id: &str) -> Result<()> {
         self.runner.stop(id).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credential_choice_never_rebuilds_without_a_new_secret() {
+        // 有新材料才重建：否则改端口/备注都会重建凭据，私钥口令会被静默丢掉
+        assert_eq!(
+            credential_choice(true, "cred_1"),
+            CredentialChoice::Rebuild
+        );
+        assert_eq!(credential_choice(false, "cred_1"), CredentialChoice::Reuse);
+        // 待填凭据没有材料可沿用：只更新字段
+        assert_eq!(credential_choice(false, ""), CredentialChoice::Skip);
+        // 给了新密钥就该重建，哪怕原来没有材料
+        assert_eq!(credential_choice(true, ""), CredentialChoice::Rebuild);
     }
 }

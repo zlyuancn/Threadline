@@ -9,7 +9,7 @@
 //! termination: phase —— 对外的只读询问（`list` / `connect_params` / `host_key_view`）不改状态，
 //! 不推进任何相位，按 MSO 纪律 1 显式声明。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -126,6 +126,7 @@ impl ServerStore {
         let errors = self.session_errors.lock().expect("session errors lock");
         for item in &mut items {
             item.session_error = errors.get(&item.id).cloned();
+            decorate(item);
         }
         Ok(ServerList { items })
     }
@@ -147,14 +148,19 @@ impl ServerStore {
 
     pub fn create(&self, req: CreateServerRequest) -> Result<ServerDto> {
         validate_create(&req)?;
-        self.require_credential(&req.credential_id)?;
+        // 空 `credential_id` = 导入的分享包还没填密码，是合法状态（`needs_credential`）。
+        // 普通创建路径在业务层已经保证凭据先建好，这里只在有引用时校验。
+        if !req.credential_id.trim().is_empty() {
+            self.require_credential(&req.credential_id)?;
+        }
 
         let mut file = self.load()?;
         if file.items.iter().any(|s| s.name == req.name) {
             return Err(anyhow!("服务器名已存在：{}", req.name));
         }
-        let dto = ServerDto {
-            id: new_id(&req.name),
+        let taken: HashSet<String> = file.items.iter().map(|s| s.id.clone()).collect();
+        let mut dto = ServerDto {
+            id: new_id(&req.name, &taken),
             name: req.name,
             host: req.host,
             port: req.port,
@@ -165,7 +171,9 @@ impl ServerStore {
             keepalive_secs: req.keepalive_secs,
             enabled: req.enabled,
             session_error: None,
+            needs_credential: false,
         };
+        decorate(&mut dto);
         file.items.push(dto.clone());
         self.save(&file)?;
         Ok(dto)
@@ -175,13 +183,25 @@ impl ServerStore {
     /// 由业务层编排；`patch()` 只管纯配置字段。
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<ServerDto> {
         let mut file = self.load()?;
+        // 待填凭据的连接不能启用：否则会话建不起来，keeper 会一直退避重试。
+        let pending = file
+            .items
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.credential_id.trim().is_empty())
+            .ok_or_else(|| anyhow!("服务器不存在：{id}"))?;
+        if pending && enabled {
+            return Err(anyhow!("这条隧道还没填密码，无法启用"));
+        }
+
         let server = file
             .items
             .iter_mut()
             .find(|s| s.id == id)
             .ok_or_else(|| anyhow!("服务器不存在：{id}"))?;
         server.enabled = enabled;
-        let dto = server.clone();
+        let mut dto = server.clone();
+        decorate(&mut dto);
         self.save(&file)?;
         Ok(dto)
     }
@@ -228,8 +248,9 @@ impl ServerStore {
         if let Some(v) = req.kind {
             server.credential_kind = v;
         }
-        let updated = server.clone();
+        let mut updated = server.clone();
         self.save(&file)?;
+        decorate(&mut updated);
         Ok(updated)
     }
 
@@ -267,6 +288,10 @@ impl ServerStore {
             .iter()
             .find(|s| s.id == id)
             .ok_or_else(|| anyhow!("服务器不存在：{id}"))?;
+        // 双保险：`set_enabled` 已经拦了启用，这里再拦一次直连调用。
+        if server.credential_id.trim().is_empty() {
+            return Err(anyhow!("这条隧道还没填密码，无法连接"));
+        }
         Ok(ConnectParams {
             server_id: server.id.clone(),
             host: server.host.clone(),
@@ -376,19 +401,36 @@ fn validate_create(req: &CreateServerRequest) -> Result<()> {
     if req.port == 0 {
         return Err(anyhow!("端口必须在 1..=65535"));
     }
-    if req.credential_id.trim().is_empty() {
-        return Err(anyhow!("必须指定凭据"));
-    }
     Ok(())
 }
 
-fn new_id(name: &str) -> String {
+/// 派生字段统一在这里算：任何返回 DTO 的路径都要过一遍，
+/// 否则填完密码后列表仍会显示「待填」。
+fn decorate(dto: &mut ServerDto) {
+    dto.needs_credential = dto.credential_id.trim().is_empty();
+}
+
+/// 生成一个在当前集合里唯一的 id。
+///
+/// 老实现是 `srv_{slug}_{pid % 10000}`：同一进程里 pid 部分是常量，
+/// 导入多条同名连接时会拿到相同 id，`find(|s| s.id == id)` 会改错条。
+fn new_id(name: &str, taken: &HashSet<String>) -> String {
     let slug: String = name
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .take(12)
         .collect();
-    format!("srv_{slug}_{}", std::process::id() % 10000)
+    let base = format!("srv_{slug}");
+    if !taken.contains(&base) {
+        return base;
+    }
+    for n in 2.. {
+        let candidate = format!("{base}_{n}");
+        if !taken.contains(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("id 空间不会耗尽")
 }
 
 #[cfg(test)]
@@ -476,6 +518,94 @@ mod tests {
                 .is_none(),
             "连上之后不能再挂着旧错误"
         );
+    }
+
+    #[test]
+    fn server_without_credential_is_pending_not_broken() {
+        // 导入分享包时没有密码：连接先落盘，但必须明确标记为「待填」
+        let f = fixture("pending-credential");
+        let dto = f
+            .servers
+            .create(create_req("imported", ""))
+            .expect("create without credential");
+        assert!(dto.credential_id.is_empty());
+        assert!(dto.needs_credential);
+
+        // 不能启用：否则会进入无意义的连接-失败循环
+        let err = f
+            .servers
+            .set_enabled(&dto.id, true)
+            .expect_err("must reject");
+        assert!(err.to_string().contains("还没填密码"), "{err}");
+
+        // 连接参数也拒绝，防止绕过 set_enabled 直接建会话
+        let err = f.servers.connect_params(&dto.id).expect_err("must reject");
+        assert!(err.to_string().contains("还没填密码"), "{err}");
+    }
+
+    #[test]
+    fn needs_credential_is_recomputed_on_every_return_path() {
+        // patch 返回的是 clone：只在 load 时回填会导致填完密码仍显示「待填」
+        let f = fixture("derive-pending");
+        let dto = f
+            .servers
+            .create(create_req("p", ""))
+            .expect("create without credential");
+
+        let patched = f
+            .servers
+            .patch(
+                &dto.id,
+                PatchServerRequest {
+                    credential_id: Some(f.credential_id.clone()),
+                    ..Default::default()
+                },
+            )
+            .expect("patch");
+        assert!(!patched.needs_credential);
+
+        let listed = f.servers.list().expect("list").items;
+        assert!(!listed[0].needs_credential);
+    }
+
+    #[test]
+    fn pending_server_can_still_be_renamed() {
+        // 导入后只改名字/登录用户：不能因为「没有材料可沿用」而失败
+        let f = fixture("pending-rename");
+        let dto = f
+            .servers
+            .create(create_req("p", ""))
+            .expect("create without credential");
+        let updated = f
+            .servers
+            .patch(
+                &dto.id,
+                PatchServerRequest {
+                    name: Some("p2".into()),
+                    username: Some("ubuntu".into()),
+                    ..Default::default()
+                },
+            )
+            .expect("patch pending");
+        assert_eq!(updated.name, "p2");
+        assert_eq!(updated.username, "ubuntu");
+        assert!(updated.needs_credential);
+    }
+
+    #[test]
+    fn server_ids_stay_unique_even_when_slugs_collide() {
+        // 中文名会被整段压成 `_`：老实现下两个中文名的 id 完全相同，
+        // 导入多条时 `find(|s| s.id == id)` 会改错条。
+        let f = fixture("id-unique");
+        let a = f
+            .servers
+            .create(create_req("远程", &f.credential_id))
+            .expect("a");
+        let b = f
+            .servers
+            .create(create_req("桌面", &f.credential_id))
+            .expect("b");
+        assert_ne!(a.id, b.id);
     }
 
     #[test]

@@ -522,9 +522,16 @@ impl TunnelRunner {
         }
 
         let params = self.servers.connect_params(server_id).map_err(|e| {
-            engine::EngineOutcome::NetworkFailed {
-                reason: e.to_string(),
-                during: engine::FailurePhase::Connecting,
+            let reason = e.to_string();
+            // 「还没填密码」是配置没到位，不是网络问题：翻成不可重试的结局，
+            // 否则 keeper 会把它当 NetworkFailed 一直退避重连。
+            if reason.contains("还没填密码") {
+                engine::EngineOutcome::CredentialMissing { reason }
+            } else {
+                engine::EngineOutcome::NetworkFailed {
+                    reason,
+                    during: engine::FailurePhase::Connecting,
+                }
             }
         })?;
         let material = self

@@ -86,6 +86,8 @@ pub enum EngineOutcome {
     FingerprintMismatch { trusted: String, observed: String },
     /// 认证被拒（密钥/密码/方式不允许）——不应自动重试。
     AuthFailed { reason: String },
+    /// 这条连接还没有登录材料（导入的分享包）——同样不应重试。
+    CredentialMissing { reason: String },
     /// 传输层失败（网络不可达、握手失败、keepalive 超时）——可退避重试。
     NetworkFailed {
         reason: String,
@@ -122,6 +124,7 @@ pub fn describe(outcome: &EngineOutcome) -> String {
             format!("主机密钥与记录不一致（记录 {trusted}，实测 {observed}）")
         }
         EngineOutcome::AuthFailed { reason } => reason.clone(),
+        EngineOutcome::CredentialMissing { reason } => reason.clone(),
     }
 }
 
@@ -135,6 +138,9 @@ pub fn to_event(outcome: &EngineOutcome) -> super::fsm::TunnelEvent {
             observed: observed.clone(),
         },
         EngineOutcome::AuthFailed { reason } => E::AuthFailed {
+            reason: reason.clone(),
+        },
+        EngineOutcome::CredentialMissing { reason } => E::CredentialMissing {
             reason: reason.clone(),
         },
         EngineOutcome::NetworkFailed { reason, during } => match during {
