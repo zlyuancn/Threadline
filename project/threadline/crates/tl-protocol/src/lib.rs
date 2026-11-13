@@ -217,9 +217,11 @@ pub struct ServerDto {
     pub session_error: Option<String>,
     /// 还没有登录材料（导入分享包后的初始状态）。
     ///
-    /// 由 `credential_id` 是否为空派生：**不落盘**（`skip`），每次返回前重算。
-    /// 落盘会让磁盘上的旧值盖住派生结果——填完密码后界面仍显示「待填」。
-    #[serde(skip)]
+    /// 由 `credential_id` 是否为空派生，每次返回前由模型重算覆盖。
+    ///
+    /// **不能用 `skip`**：它连序列化一起跳过，HTTP 响应里就没有这个字段，
+    /// 界面永远看不到「待填」。落盘多一份旧值无害——读回来必被 `decorate` 覆盖。
+    #[serde(default)]
     pub needs_credential: bool,
 }
 
@@ -762,7 +764,9 @@ pub struct ProfileImportForward {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfileImportResult {
+    /// 写入的连接条数（**新建 + 覆盖**）。
     pub created_servers: usize,
+    /// 写入的转发条数（**新建 + 覆盖**）。
     pub created_forwards: usize,
     pub skipped: usize,
     pub failed: Vec<ProfileImportFailure>,
@@ -1158,7 +1162,7 @@ mod tests {
                 keepalive_secs: 30,
                 enabled: false,
                 session_error: None,
-                // skip 字段：落盘时丢弃，读回来必然是 false
+                // 派生字段：落盘冗余一份，读回后由模型按 credential_id 重算覆盖
                 needs_credential: false,
             }],
         };
@@ -1179,8 +1183,9 @@ mod tests {
     }
 
     #[test]
-    fn needs_credential_is_derived_not_persisted() {
-        // 它是从 credential_id 派生的：一旦落盘，磁盘上的旧值就会盖住派生结果
+    fn needs_credential_reaches_the_client() {
+        // 它是从 credential_id 派生的；但不能用 skip —— 那会连响应字段一起吞掉，
+        // 界面就永远看不到「待填密码」。
         let dto = ServerDto {
             id: "srv_1".into(),
             name: "web-01".into(),
@@ -1196,7 +1201,7 @@ mod tests {
             needs_credential: true,
         };
         let text = serde_json::to_string(&dto).unwrap();
-        assert!(!text.contains("needs_credential"), "{text}");
+        assert!(text.contains("\"needs_credential\":true"), "{text}");
     }
 
     #[test]

@@ -416,7 +416,9 @@ export interface ProfileImportFailure {
 }
 
 export interface ProfileImportResult {
+  /** 写入的连接条数（**新建 + 覆盖**）。 */
   created_servers: number;
+  /** 写入的转发条数（**新建 + 覆盖**）。 */
   created_forwards: number;
   skipped: number;
   failed: ProfileImportFailure[];

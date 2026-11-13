@@ -33,7 +33,6 @@ const actions = reactive<Record<string, string>>({});
 const ports = reactive<Record<string, number>>({});
 const names = reactive<Record<string, string>>({});
 
-const keepDisabled = ref(true);
 const keepLocalPreferences = ref(true);
 
 const localPreferences = ref(readPreferences());
@@ -183,7 +182,9 @@ function buildRequest(): ProfileImportRequest {
       }),
     });
   }
-  return { servers: out, keep_disabled: keepDisabled.value };
+  // 固定停用：包里没有密码，启用必然失败（Core 会返回 credential_missing）。
+  // 给用户一个「导入后自动连接」的开关只会让连接立刻进入失败状态。
+  return { servers: out, keep_disabled: true };
 }
 
 async function doImport(): Promise<void> {
@@ -324,9 +325,11 @@ watch(open, (value) => {
       </ul>
 
       <div class="pf-options">
-        <el-checkbox v-model="keepDisabled">导入后保持停用</el-checkbox>
         <el-checkbox v-model="keepLocalPreferences">不覆盖本机偏好</el-checkbox>
       </div>
+      <p class="hint">
+        导入的连接没有密码，会保持停用；在「编辑」里填好密码后再自己打开。
+      </p>
 
       <div v-if="preferenceDiff.length && !keepLocalPreferences" class="pf-options">
         <p class="hint" style="margin: 0 0 4px; width: 100%">将覆盖本机设置：</p>
@@ -338,7 +341,7 @@ watch(open, (value) => {
 
     <template v-else>
       <p class="hint" style="margin-top: 0">
-        完成：新建 {{ result?.created_servers ?? 0 }} 条连接 /
+        完成：写入 {{ result?.created_servers ?? 0 }} 条连接 /
         {{ result?.created_forwards ?? 0 }} 条转发，跳过 {{ result?.skipped ?? 0 }} 条。
       </p>
       <ul v-if="result?.failed.length" class="pf-review">

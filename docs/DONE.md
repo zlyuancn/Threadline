@@ -22,7 +22,23 @@
 
 **验证**：Rust `cargo test -p tl-core` 164 项、`cargo test -p tl-protocol` 10 项、clippy 通过；
 前端 `vitest` 70 项（新增 zip 5 / profile 13 / preferences 7）、`vue-tsc --noEmit`、`vite build`、
-`msocheck` 通过。TESTPLAN 增 U-16 / U-17。
+`msocheck` 通过。TESTPLAN 增 U-16 / U-17。导出的包另用 **Windows 自带 `Expand-Archive`** 打开验证过
+（解出 `profile.json` / `README.txt` / `icons/*.png`），确认是标准 zip 而非"只有自己读得通"。
+
+**端到端（真实核心 + HTTP，2026-11-13）**：临时数据目录起 `tl-core --manual`，依次打
+`profile/plan → profile/import → /servers → /servers/{id}/enabled → 再次 plan/import → 覆盖导入`。
+抓出并修掉两个单测覆盖不到的缺陷：
+
+1. `needs_credential` 原本用 `#[serde(skip)]`，它**连序列化一起跳过**——`/servers` 响应里根本没有
+   这个字段，界面永远看不到「待填密码」。改为 `#[serde(default)]`：落盘冗余一份，读回由 `decorate`
+   按 `credential_id` 重算覆盖（`crates/tl-protocol` 的测试改为断言字段**必须出现**在 JSON 里）。
+2. 覆盖导入只增加 `created_forwards`、不加 `created_servers`，界面会显示「写入 0 条连接」，看起来像失败。
+   统一为「写入 = 新建 + 覆盖」计数，同时去掉导入面板里无意义的「导入后保持停用」开关
+   （包里没有密码，启用必然 409，开关只会制造"关掉就该自动连"的误解）。
+
+实测确认（超出单测范围的行为）：拒绝启用返回 `409 credential_missing` 且带中文原因；重复导入落到
+`failed` 而不是写出脏数据；覆盖导入**不改** `credential_id`、也**不用**文件里的 `SHA256:evil` 顶掉
+已信任的 `SHA256:known`；转发的 `local_port` 与 `auto_start` 按文件更新。
 
 ### 修复：同一条转发在首页卡片与应用磁贴上的默认图标不一致
 

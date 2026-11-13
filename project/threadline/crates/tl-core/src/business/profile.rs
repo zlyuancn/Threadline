@@ -195,6 +195,9 @@ pub fn import(
             }
             "overwrite" => match overwrite_server(servers, server) {
                 Ok(id) => {
+                    // 覆盖也计入「写入」：否则界面会显示「0 条连接」，
+                    // 用户会以为覆盖没生效（实际字段在下面一行改了）
+                    result.created_servers += 1;
                     server_ids.insert(server.source_id.clone(), id);
                 }
                 Err(e) => {
