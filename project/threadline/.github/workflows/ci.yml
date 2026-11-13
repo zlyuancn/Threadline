@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: 门禁（Windows）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本只由 package.json 的 packageManager 声明：这里再传 version 会被
+      # pnpm/action-setup 判为「Multiple versions of pnpm specified」并硬失败。
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: 缓存 Rust 构建
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            src-tauri -> src-tauri/target
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      # dist 必须先于 Agent 编译：tauri-build 在编译期内嵌 ../dist。
+      - name: 前端测试
+        run: pnpm test
+
+      - name: 前端构建
+        run: pnpm build
+
+      - name: 格式检查（根 workspace）
+        run: cargo fmt --all -- --check
+
+      - name: Clippy（根 workspace）
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: 核心测试
+        run: cargo test --workspace
+
+      # tauri-build 在 externalBin 缺失时直接失败，而 src-tauri/binaries 是 gitignored。
+      - name: 构建 release 核心
+        run: cargo build --release -p tl-core
+
+      - name: 准备 sidecar
+        run: ./scripts/bundle-sidecars.ps1
+        shell: pwsh
+
+      # src-tauri 是独立 workspace，上面的根级 fmt/clippy 看不到它。
+      - name: 格式检查（Agent）
+        working-directory: src-tauri
+        run: cargo fmt -- --check
+
+      - name: Clippy（Agent）
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Agent 测试
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: 架构检查（自检）
+        run: node tools/msocheck/msocheck.mjs --selftest
+
+      - name: 架构检查
+        run: node tools/msocheck/msocheck.mjs
+
+      # 真正的打包路径（bundle 目录、sidecar 定位）只有跑一次 build 才暴露。
+      - name: 打包编译验证
+        run: pnpm tauri build --no-bundle

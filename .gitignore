@@ -1,0 +1,7 @@
+# 单仓：工作区文档 + project/threadline 一起进版本库。
+# 构建产物与依赖由 project/threadline/.gitignore 负责排除。
+.DS_Store
+*.log
+
+# 在仓库根直接跑 pnpm/vitest/npx 会在这里留下缓存
+node_modules/
