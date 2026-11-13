@@ -40,6 +40,24 @@
 `failed` 而不是写出脏数据；覆盖导入**不改** `credential_id`、也**不用**文件里的 `SHA256:evil` 顶掉
 已信任的 `SHA256:known`；转发的 `local_port` 与 `auto_start` 按文件更新。
 
+### 发布：v0.2.0
+
+- 版本号 `0.1.0 → 0.2.0`：`package.json`、根 `Cargo.toml`（`workspace.package`）、`src-tauri/Cargo.toml`、
+  `src-tauri/tauri.conf.json` 四处一致；界面角落与导出包的 `app_version` 改为由 vite `define` 注入，
+  版本号只留 `package.json` 一个真相。
+- `CHANGELOG.md` 补 0.2.0：新增配置导入导出与「待填凭据」状态；修复凭据被无谓重建与连接 id 撞车；
+  变更项记录原生文件对话框的回归修复。
+- 发布历史用 `git subtree split -P project/threadline` 拆成扁平结构（105 个提交，`package.json` 在根，
+  与 GitHub 现有布局一致），annotated tag `v0.2.0` 打在该提交上（`29ea917`）。
+- GitHub Actions `Release`（run 43376934401）：门禁 job 与构建 job 均 success，Release 已发布
+  https://github.com/zlyuancn/Threadline/releases/tag/v0.2.0 ，资产 3 个（安装包 / 便携包 / `SHA256SUMS.txt`）。
+- 推送通道踩坑：本机 `ssh` 无法解析 `github.com`（系统 DNS 正常、`Test-NetConnection` 22 通），走 IP
+  `20.205.243.166`；`zly-app` 密钥只读（`Permission to ... denied to zly-app`），有写权限的是
+  `~/.ssh/zlyuancn-tl`。已写入本机 `.git/config`（`remote github` + `core.sshCommand`），**不入库**。
+- 本机安装升级到 0.2.0（`d:\ruanjian\threadline`），`FileVersion` 与启动均验证通过。
+- **遗留**：GitHub `main` 仍是 v0.1.0 的单快照提交、与本地历史无共同祖先，更新需强推
+  `git push --force github release/v0.2.0:main`；未执行，等明确授权。
+
 ### 修复：同一条转发在首页卡片与应用磁贴上的默认图标不一致
 
 **用户报**：`mypc远程桌面`（RDP，本机 3389）在首页「端口转发」卡片上是 TCP 的「两条线」图标，
