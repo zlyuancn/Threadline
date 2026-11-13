@@ -33,6 +33,11 @@ export class ApiFailure extends Error {
   get needsElevation(): boolean {
     return this.code === 'privilege_required';
   }
+
+  /** 这条隧道还没填密码（导入的连接）：提示「先去编辑填一次」，不弹红色错误。 */
+  get credentialMissing(): boolean {
+    return this.code === 'credential_missing';
+  }
 }
 
 const TOKEN_KEY = 'tl.token';
@@ -76,6 +81,11 @@ async function request<T>(
    * 那条分支，只能看到一个 409 错误横幅。
    */
   allowStatus: number[] = [],
+  /**
+   * 本次请求的超时。默认 15s；只有批量操作（导入配置）放宽——
+   * 200 条逐条落地会超时，而那并不是"核心卡死"。
+   */
+  timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<T> {
   const { token } = bootstrap();
   const headers: Record<string, string> = {};
@@ -94,7 +104,7 @@ async function request<T>(
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
       // 每个请求都有上界：核心卡死时不能把界面吊在半空。
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {
     // 带上真实请求地址：这样"契约没注入（baseUrl 为空）"与"核心不可达/CORS"能区分开。
@@ -116,7 +126,7 @@ async function request<T>(
   if (response.status === 401 && !retriedAuth) {
     const { refreshBootstrap } = await import('./native');
     if (await refreshBootstrap()) {
-      return request<T>(method, path, body, true, allowStatus);
+      return request<T>(method, path, body, true, allowStatus, timeoutMs);
     }
   }
 
@@ -152,6 +162,14 @@ export const http = {
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
   patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
   del: <T>(path: string) => request<T>('DELETE', path),
+  /**
+   * 批量操作专用：默认 60s。
+   *
+   * 导入配置是逐条落地，200 条连接 + 转发不是"核心卡住"，
+   * 用 15s 会把它掐断，界面只能看到一个超时。
+   */
+  postSlow: <T>(path: string, body?: unknown, timeoutMs = 60_000) =>
+    request<T>('POST', path, body, false, [], timeoutMs),
 };
 
 /** 健康探活（免鉴权），返回核心的 `instance_id` 以便与 `control.json` 比对。 */

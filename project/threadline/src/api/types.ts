@@ -66,6 +66,13 @@ export interface ServerDto {
   enabled: boolean;
   /** 最近一次建立会话失败的原因（运行时）。 */
   session_error?: string | null;
+  /**
+   * 还没有登录材料（导入分享包后的状态）。
+   *
+   * 这类连接不能启用、不能连接；编辑里填一次密码/私钥即恢复。
+   * 由 Core 派生，不落盘。
+   */
+  needs_credential?: boolean;
 }
 
 export interface ServerList {
@@ -327,6 +334,92 @@ export interface CreateCredentialRequest {
   username: string;
   secret: string;
   passphrase?: string | null;
+}
+
+/* ───────────── 配置导入导出（profile） ───────────── */
+
+export type PlannedAction =
+  | 'ok'
+  | 'exists'
+  | 'name_taken'
+  | 'port_taken'
+  | 'domain_taken'
+  | 'invalid';
+
+export interface PlannedForward {
+  index: number;
+  name: string;
+  action: PlannedAction;
+  reason?: string | null;
+  /** 端口/域名被谁占：界面显示「已被 xxx 占用」。 */
+  occupied_by?: string | null;
+}
+
+export interface PlannedServer {
+  index: number;
+  name: string;
+  action: PlannedAction;
+  reason?: string | null;
+  /** 重名时 Core 建议的新名字。 */
+  suggested_name?: string | null;
+  forwards: PlannedForward[];
+}
+
+export interface ProfilePlan {
+  servers: PlannedServer[];
+}
+
+/** 用户确认后的一条转发。`action` 决定 Core 怎么落地。 */
+export interface ProfileImportForward {
+  name: string;
+  local_host?: string;
+  local_port: number;
+  remote_host: string;
+  remote_port: number;
+  scheme?: string;
+  domain?: string;
+  remote_scheme?: RemoteScheme | null;
+  open_path?: string;
+  note?: string;
+  group?: string;
+  in_app?: boolean;
+  auto_start?: boolean;
+  /** 已从包里读出的图标（data URI）；空 = 不带。 */
+  icon?: string;
+  action: 'create' | 'overwrite' | 'skip';
+  /** 覆盖时按此 id 找现有转发。 */
+  target_id?: string | null;
+}
+
+export interface ProfileImportServer {
+  source_id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  credential_kind: CredentialKind;
+  keepalive_secs?: number;
+  host_key_fingerprint?: string | null;
+  action: 'create' | 'overwrite' | 'skip';
+  forwards: ProfileImportForward[];
+}
+
+export interface ProfileImportRequest {
+  servers: ProfileImportServer[];
+  /** 导入后保持停用；缺省由 Core 当作 true。 */
+  keep_disabled?: boolean;
+}
+
+export interface ProfileImportFailure {
+  name: string;
+  reason: string;
+}
+
+export interface ProfileImportResult {
+  created_servers: number;
+  created_forwards: number;
+  skipped: number;
+  failed: ProfileImportFailure[];
 }
 
 export interface PatchCredentialRequest {
