@@ -954,6 +954,74 @@ fn export_gateway_ca() -> Result<String, String> {
         .map_err(|e| format!("读取根证书失败：{e}"))
 }
 
+/// 读回来的配置包。
+///
+/// `data` 用 base64 而不是 `Vec<u8>`：Tauri 的 IPC 是 JSON，字节数组会膨胀约 4 倍，
+/// 一个几百 KB 的包能涨到几 MB 的字符串。
+#[derive(serde::Serialize)]
+struct ProfilePackage {
+    name: String,
+    data: String,
+}
+
+/// 导出配置包：弹**系统保存对话框**，返回用户最终选的路径（取消为 `None`）。
+///
+/// 不能用 WebView 的 `<a download>`：那条路在 Tauri 里是静默下载，文件落进默认下载
+/// 目录，用户既看不到落点也没有选择余地——分享配置这件事必须让人知道存哪。
+#[tauri::command]
+async fn save_profile_package(bytes_base64: String, default_name: String) -> Result<Option<String>, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(bytes_base64.as_bytes())
+        .map_err(|e| format!("数据损坏：{e}"))?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let picked = rfd::FileDialog::new()
+            .set_title("导出配置")
+            .set_file_name(&default_name)
+            .add_filter("Threadline 配置", &["threadline"])
+            .save_file();
+        let Some(path) = picked else {
+            return Ok::<Option<String>, String>(None);
+        };
+        std::fs::write(&path, &bytes).map_err(|e| format!("写入失败：{e}"))?;
+        Ok(Some(path.to_string_lossy().to_string()))
+    })
+    .await
+    .map_err(|e| format!("保存对话框失败：{e}"))?
+}
+
+/// 导入配置包：弹**系统打开对话框**，读回文件名与内容（取消为 `None`）。
+#[tauri::command]
+async fn open_profile_package() -> Result<Option<ProfilePackage>, String> {
+    use base64::Engine;
+    tauri::async_runtime::spawn_blocking(move || {
+        let picked = rfd::FileDialog::new()
+            .set_title("导入配置")
+            .add_filter("Threadline 配置", &["threadline"])
+            .pick_file();
+        let Some(path) = picked else {
+            return Ok::<Option<ProfilePackage>, String>(None);
+        };
+        let meta = std::fs::metadata(&path).map_err(|e| format!("读取失败：{e}"))?;
+        // 与前端同一上限：比这更大的多半不是配置包
+        if meta.len() > 10 * 1024 * 1024 {
+            return Err("文件太大（超过 10MB），不是有效的配置包".to_string());
+        }
+        let bytes = std::fs::read(&path).map_err(|e| format!("读取失败：{e}"))?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "config.threadline".to_string());
+        Ok(Some(ProfilePackage {
+            name,
+            data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        }))
+    })
+    .await
+    .map_err(|e| format!("打开对话框失败：{e}"))?
+}
+
 /// 找到同目录下的 `tl-core.exe`（安装后两者同处一个目录）。
 ///
 /// 开发态额外允许 `<repo>/target/debug/tl-core.exe` 兜底。这条分支**只在 debug
@@ -1475,6 +1543,8 @@ fn main() {
             install_gateway_ca,
             gateway_ca_trust,
             export_gateway_ca,
+            save_profile_package,
+            open_profile_package,
             sync_logon_entry,
             hotkey::get_hotkey,
             hotkey::set_hotkey,

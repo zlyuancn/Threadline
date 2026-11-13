@@ -304,3 +304,63 @@ export async function exportGatewayCa(): Promise<string | null> {
     return null;
   }
 }
+
+/* ───────────── 配置包：系统文件对话框 ───────────── */
+
+/**
+ * base64 转换放在这一层而不是 import `models/profile`：
+ * api 层不依赖 models 层（分层由 msocheck 守着），而且只有两个函数。
+ */
+function toBase64(data: Uint8Array): string {
+  let binary = '';
+  const step = 0x8000;
+  for (let i = 0; i < data.length; i += step) {
+    binary += String.fromCharCode(...data.subarray(i, i + step));
+  }
+  return btoa(binary);
+}
+
+function fromBase64(text: string): Uint8Array {
+  const binary = atob(text);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
+}
+
+/**
+ * 导出配置包：弹系统保存对话框，返回用户选定的路径；取消或被拒时返回 null。
+ *
+ * 之前用 `<a download>`：Tauri 里它是静默下载，文件落进默认下载目录，
+ * 用户既看不到落点也没得选。分享配置必须让人知道存哪。
+ */
+export async function saveProfilePackage(
+  bytes: Uint8Array,
+  defaultName: string,
+): Promise<string | null> {
+  if (!isTauri()) {
+    return null;
+  }
+  return invoke<string | null>('save_profile_package', {
+    bytesBase64: toBase64(bytes),
+    defaultName,
+  });
+}
+
+/** 导入配置包：弹系统打开对话框，读回文件名与内容；取消时返回 null。 */
+export async function openProfilePackage(): Promise<{
+  name: string;
+  bytes: Uint8Array;
+} | null> {
+  if (!isTauri()) {
+    return null;
+  }
+  const picked = await invoke<{ name: string; data: string } | null>(
+    'open_profile_package',
+  );
+  if (!picked) {
+    return null;
+  }
+  return { name: picked.name, bytes: fromBase64(picked.data) };
+}

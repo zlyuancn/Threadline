@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+import { isTauri, openProfilePackage } from '../api/native';
 import { profileApi } from '../api/profile';
 import type {
   ProfileImportRequest,
@@ -61,6 +62,27 @@ function reset(): void {
   }
 }
 
+/** 桌面端走系统打开对话框；浏览器调试退回 `<input type=file>`。 */
+async function pickPackage(): Promise<void> {
+  if (!isTauri()) {
+    fileInput.value?.click();
+    return;
+  }
+  busy.value = true;
+  try {
+    const picked = await openProfilePackage();
+    if (!picked) {
+      // 用户取消：保持当前步骤，不要报错
+      return;
+    }
+    await loadPackage(picked.name, picked.bytes);
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    busy.value = false;
+  }
+}
+
 async function onPick(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -69,20 +91,23 @@ async function onPick(event: Event): Promise<void> {
   }
   busy.value = true;
   try {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const pkg = await readPackage(bytes);
-    parsed.value = pkg;
-    fileName.value = file.name;
-    localPreferences.value = readPreferences();
-    const planned = await profileApi.plan(pkg.document.servers);
-    plan.value = planned;
-    seedsActions(planned);
-    step.value = 'review';
+    await loadPackage(file.name, new Uint8Array(await file.arrayBuffer()));
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : String(e));
   } finally {
     busy.value = false;
   }
+}
+
+async function loadPackage(name: string, bytes: Uint8Array): Promise<void> {
+  const pkg = await readPackage(bytes);
+  parsed.value = pkg;
+  fileName.value = name;
+  localPreferences.value = readPreferences();
+  const planned = await profileApi.plan(pkg.document.servers);
+  plan.value = planned;
+  seedsActions(planned);
+  step.value = 'review';
 }
 
 /** 默认动作：能建就建，冲突一律先跳过——重复导入最怕"悄悄覆盖"。 */
@@ -232,11 +257,15 @@ watch(open, (value) => {
         选择一个 <code>.threadline</code> 文件。包里不含密码/私钥，
         导入后连接会标成「待填密码」，编辑里补一次即可。
       </p>
+      <button class="btn is-primary" :disabled="busy" @click="pickPackage">
+        {{ busy ? '读取中…' : '选择 .threadline 文件' }}
+      </button>
+      <!-- 浏览器调试用：桌面端走系统对话框，不会显示这个 input -->
       <input
         ref="fileInput"
         type="file"
         accept=".threadline"
-        :disabled="busy"
+        style="display: none"
         @change="onPick"
       />
     </template>

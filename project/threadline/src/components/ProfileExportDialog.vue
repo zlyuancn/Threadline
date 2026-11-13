@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+import { isTauri, saveProfilePackage } from '../api/native';
 import type { TunnelDto } from '../api/types';
 import { useHotkeyStore } from '../models/hotkey';
 import { buildProfile, packageFileName, writePackage } from '../models/profile';
@@ -136,16 +137,29 @@ async function doExport(): Promise<void> {
         : {}),
     });
     const bytes = writePackage(built);
+    const name = packageFileName();
+    // 桌面端走系统保存对话框：让用户自己选目录，并回显最终落点
+    const saved = await saveProfilePackage(bytes, name);
+    if (saved) {
+      ElMessage.success(
+        `已导出 ${counts.value.servers} 条连接 / ${counts.value.forwards} 条转发 → ${saved}`,
+      );
+      open.value = false;
+      return;
+    }
+    if (isTauri()) {
+      // 用户在对话框里点了取消：不要假装成功
+      return;
+    }
+    // 浏览器调试（没有 Tauri）：退回普通下载
     const blob = new Blob([bytes as BlobPart], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = packageFileName();
+    link.download = name;
     link.click();
     URL.revokeObjectURL(url);
-    ElMessage.success(
-      `已导出 ${counts.value.servers} 条连接 / ${counts.value.forwards} 条转发`,
-    );
+    ElMessage.success(`已导出 ${counts.value.servers} 条连接 / ${counts.value.forwards} 条转发`);
     open.value = false;
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : String(e));
@@ -169,6 +183,7 @@ watch(open, (value) => {
     <p class="hint" style="margin-top: 0">
       勾连接 = 连它下面的转发一起带走；只勾转发时，所属连接会自动补上。
       <strong>包里不含密码、私钥</strong>，对方导入后需要自己填。
+      点「导出」后会弹出保存位置，自己选存到哪。
     </p>
 
     <div class="pf-toolbar">

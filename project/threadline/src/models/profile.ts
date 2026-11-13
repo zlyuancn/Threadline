@@ -319,24 +319,29 @@ function decodeDataUri(uri: string): Uint8Array | null {
     return null;
   }
   try {
-    const binary = atob(uri.slice(comma + 1));
-    const out = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) {
-      out[i] = binary.charCodeAt(i);
-    }
-    return out;
+    return base64ToBytes(uri.slice(comma + 1));
   } catch {
     return null;
   }
 }
 
-function bytesToBase64(data: Uint8Array): string {
+/** 导出给原生桥用：Tauri 的 JSON IPC 传字节数组会膨胀，统一走 base64。 */
+export function bytesToBase64(data: Uint8Array): string {
   let binary = '';
   const step = 0x8000;
   for (let i = 0; i < data.length; i += step) {
     binary += String.fromCharCode(...data.subarray(i, i + step));
   }
   return btoa(binary);
+}
+
+export function base64ToBytes(text: string): Uint8Array {
+  const binary = atob(text);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
 }
 
 /** FNV-1a 的 32 位版本，转 36 进制：只用来给图标起一个稳定短名。 */
