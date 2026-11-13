@@ -64,6 +64,10 @@ docs/plans/           设计文档与实施计划
 5. **CAW 不变量不可破**：核心零 UI、助手无状态、唤醒必退、注册⊥运行、降级必标记。
 6. **凭据只在 Core 内解密**：Agent/Wake 不读 `credentials.dat`，也不接收明文凭据回显。
 7. **门禁一条命令**：`bash scripts/verify.sh`（构建 + 测试 + 格式 + lint + 机检）全绿才提交。
+   **不要手动挑步骤跑**：`src-tauri` 是独立 workspace，根目录的 `cargo fmt --all` /
+   `--workspace` 完全看不到它，两套 workspace 必须各跑一遍；`verify.ps1` 已经覆盖
+   两套的 fmt/clippy/test 加上前端与 msocheck。v0.2.1 首次发版就栽在这上面——本地只跑了
+   根 workspace 的 fmt，CI 的「格式检查（Agent）」直接红，Release 没出包。
 8. **不发散**：v1 只做 `-L` 本地转发；`-R`/`-D`/多用户/跨平台均不在范围内。
 
 ## 当前状态
