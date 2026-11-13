@@ -1,0 +1,2632 @@
+/* ───────────── 结构（与配色无关） ───────────── */
+
+:root {
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 20px;
+
+  /* Element Plus 只在 :root 里映射一次，具体色值全部来自主题变量 */
+  --el-color-primary: var(--mint);
+  --el-color-success: var(--mint);
+  --el-color-warning: var(--warn);
+  --el-color-danger: var(--bad);
+  --el-bg-color: var(--card-solid);
+  --el-bg-color-overlay: var(--overlay);
+  --el-text-color-primary: var(--text);
+  --el-text-color-regular: var(--text-2);
+  --el-text-color-secondary: var(--text-3);
+  --el-border-color: var(--line-strong);
+  --el-border-color-light: var(--line);
+  --el-fill-color-blank: var(--fill);
+  --el-fill-color-light: var(--fill-light);
+  --el-mask-color: var(--mask);
+  --el-border-radius-base: 10px;
+  --el-component-size-small: 28px;
+}
+
+/* ───────────── 主题 ─────────────
+ * 切换方式：<html data-theme="ocean">。
+ * 每个主题只给色值，结构变量和 Element Plus 映射都留在上面的 :root，
+ * 所以加一个主题就是复制一段、只改颜色。
+ */
+
+/* 墨玉：深墨绿 + 薄荷/青（原始配色） */
+:root,
+[data-theme='jade'] {
+  --bg: #071316;
+  --bg-2: #0a1b1f;
+  --rail: #0b1a1d;
+  --card: rgba(19, 40, 44, 0.72);
+  --card-solid: #102529;
+  --card-hi: rgba(28, 58, 62, 0.72);
+  --card-grad: linear-gradient(158deg, rgba(28, 62, 66, 0.72) 0%, rgba(15, 36, 41, 0.88) 58%, rgba(12, 30, 34, 0.92) 100%);
+  --inset: color-mix(in srgb, var(--bg) 55%, transparent);
+
+  --line: rgba(140, 230, 210, 0.09);
+  --line-strong: rgba(140, 230, 210, 0.16);
+  /* 组件级浅色叠加：亮色主题必须覆盖成深色半透明，否则白底上看不见。 */
+  --tint: rgba(255, 255, 255, 0.06);
+  --tint-strong: rgba(255, 255, 255, 0.1);
+
+  --text: #eaf5f3;
+  --text-2: #a7bfbc;
+  --text-3: #6f8a87;
+
+  --mint: #34d399;
+  --cyan: #22d3ee;
+  --grad: linear-gradient(135deg, #34d399 0%, #22d3ee 100%);
+  --mint-soft: color-mix(in srgb, var(--mint) 14%, transparent);
+  --warn: #f5c451;
+  --warn-soft: color-mix(in srgb, var(--warn) 12%, transparent);
+  --warn-text: #fcd34d;
+  --bad: #f87171;
+  --bad-soft: color-mix(in srgb, var(--bad) 12%, transparent);
+  --bad-text: #fda4af;
+  --on-accent: #052e28;
+
+  --overlay: #12292e;
+  --fill: #0d2126;
+  --fill-light: #143137;
+  --mask: rgba(3, 10, 12, 0.72);
+  --glow-1: #34d399;
+  --glow-2: #22d3ee;
+}
+
+/* 深海：冷蓝 + 靛紫 */
+[data-theme='ocean'] {
+  --bg: #061220;
+  --bg-2: #081a2c;
+  --rail: #081625;
+  --card: rgba(18, 38, 60, 0.72);
+  --card-solid: #0e2438;
+  --card-hi: rgba(26, 52, 78, 0.72);
+  --card-grad: linear-gradient(158deg, rgba(26, 52, 78, 0.72) 0%, rgba(13, 35, 56, 0.9) 100%);
+  --inset: rgba(4, 14, 24, 0.55);
+
+  --line: rgba(130, 190, 255, 0.09);
+  --line-strong: rgba(130, 190, 255, 0.16);
+
+  --text: #e6f1fb;
+  --text-2: #9fb8d0;
+  --text-3: #6b87a3;
+
+  --mint: #38bdf8;
+  --cyan: #818cf8;
+  --grad: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
+  --mint-soft: rgba(56, 189, 248, 0.15);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.12);
+  --warn-text: #fcd34d;
+  --bad: #fb7185;
+  --bad-soft: rgba(251, 113, 133, 0.12);
+  --bad-text: #fda4af;
+  --on-accent: #04202e;
+
+  --overlay: #0d2338;
+  --fill: #08192a;
+  --fill-light: #103048;
+  --mask: rgba(2, 8, 16, 0.75);
+  --glow-1: #38bdf8;
+  --glow-2: #818cf8;
+}
+
+/* 紫夜：深紫 + 品红 */
+[data-theme='violet'] {
+  --bg: #0d0a17;
+  --bg-2: #130f20;
+  --rail: #120e1d;
+  --card: rgba(34, 27, 54, 0.72);
+  --card-solid: #1a1428;
+  --card-hi: rgba(46, 37, 71, 0.72);
+  --card-grad: linear-gradient(158deg, rgba(46, 37, 71, 0.72) 0%, rgba(22, 17, 36, 0.92) 100%);
+  --inset: rgba(10, 7, 18, 0.55);
+
+  --line: rgba(190, 160, 255, 0.09);
+  --line-strong: rgba(190, 160, 255, 0.16);
+
+  --text: #f0eafb;
+  --text-2: #b3a7cc;
+  --text-3: #7d719a;
+
+  --mint: #a78bfa;
+  --cyan: #f472b6;
+  --grad: linear-gradient(135deg, #a78bfa 0%, #f472b6 100%);
+  --mint-soft: rgba(167, 139, 250, 0.15);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.12);
+  --warn-text: #fcd34d;
+  --bad: #fb7185;
+  --bad-soft: rgba(251, 113, 133, 0.12);
+  --bad-text: #fda4af;
+  --on-accent: #1b1030;
+
+  --overlay: #1d1730;
+  --fill: #150f22;
+  --fill-light: #241c38;
+  --mask: rgba(8, 5, 14, 0.75);
+  --glow-1: #a78bfa;
+  --glow-2: #f472b6;
+}
+
+/* 炭火：暖褐 + 琥珀 */
+[data-theme='ember'] {
+  --bg: #140f0c;
+  --bg-2: #1b1410;
+  --rail: #1a120e;
+  --card: rgba(45, 32, 24, 0.72);
+  --card-solid: #221812;
+  --card-hi: rgba(60, 44, 33, 0.72);
+  --card-grad: linear-gradient(158deg, rgba(60, 44, 33, 0.72) 0%, rgba(30, 20, 14, 0.92) 100%);
+  --inset: rgba(12, 8, 6, 0.55);
+
+  --line: rgba(255, 190, 140, 0.09);
+  --line-strong: rgba(255, 190, 140, 0.16);
+
+  --text: #f7ece4;
+  --text-2: #c3aa99;
+  --text-3: #8c7566;
+
+  --mint: #fb923c;
+  --cyan: #f59e0b;
+  --grad: linear-gradient(135deg, #fb923c 0%, #f59e0b 100%);
+  --mint-soft: rgba(251, 146, 60, 0.15);
+  --warn: #fcd34d;
+  --warn-soft: rgba(252, 211, 77, 0.12);
+  --warn-text: #fde68a;
+  --bad: #ef4444;
+  --bad-soft: rgba(239, 68, 68, 0.12);
+  --bad-text: #fecaca;
+  --on-accent: #241005;
+
+  --overlay: #2a1d15;
+  --fill: #1d140f;
+  --fill-light: #2d2016;
+  --mask: rgba(10, 6, 4, 0.75);
+  --glow-1: #fb923c;
+  --glow-2: #f59e0b;
+}
+
+/* 青瓷：墨青 + 青瓷绿/天青（暗色） */
+[data-theme='celadon'] {
+  --bg: #0a1416;
+  --bg-2: #0e1c1f;
+  --rail: #0c181a;
+  --card: rgba(22, 46, 50, 0.72);
+  --card-solid: #123236;
+  --card-hi: rgba(32, 64, 68, 0.72);
+  --card-grad: linear-gradient(158deg, rgba(30, 62, 66, 0.75) 0%, rgba(16, 38, 42, 0.92) 100%);
+  --inset: rgba(6, 16, 18, 0.55);
+
+  --line: rgba(150, 235, 225, 0.09);
+  --line-strong: rgba(150, 235, 225, 0.16);
+
+  --text: #e6f4f2;
+  --text-2: #9fbdb8;
+  --text-3: #6c8a86;
+
+  --mint: #2dd4bf;
+  --cyan: #7dd3fc;
+  --grad: linear-gradient(135deg, #2dd4bf 0%, #7dd3fc 100%);
+  --mint-soft: rgba(45, 212, 191, 0.14);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.12);
+  --warn-text: #fcd34d;
+  --bad: #f87171;
+  --bad-soft: rgba(248, 113, 113, 0.12);
+  --bad-text: #fca5a5;
+  --on-accent: #052e2b;
+
+  --overlay: #103033;
+  --fill: #0c2226;
+  --fill-light: #14383c;
+  --mask: rgba(4, 12, 14, 0.72);
+  --glow-1: #2dd4bf;
+  --glow-2: #7dd3fc;
+}
+
+/* 宣纸：暖白 + 朱红/墨绿（亮色） */
+[data-theme='parchment'] {
+  --bg: #f6f2e9;
+  --bg-2: #efe9dd;
+  --rail: #f1ece1;
+  --card: rgba(255, 253, 247, 0.82);
+  --card-solid: #fffdf8;
+  --card-hi: rgba(255, 255, 255, 0.92);
+  --card-grad: linear-gradient(158deg, rgba(255, 253, 247, 0.95) 0%, rgba(244, 237, 224, 0.98) 100%);
+  --inset: rgba(80, 65, 40, 0.06);
+
+  --line: rgba(120, 75, 35, 0.16);
+  --line-strong: rgba(120, 75, 35, 0.28);
+  --tint: rgba(70, 55, 30, 0.06);
+  --tint-strong: rgba(70, 55, 30, 0.12);
+
+  --text: #2f2920;
+  --text-2: #6d6254;
+  --text-3: #9a8d7c;
+
+  --mint: #c2410c;
+  --cyan: #0f766e;
+  --grad: linear-gradient(135deg, #c2410c 0%, #0f766e 100%);
+  --mint-soft: rgba(194, 65, 12, 0.1);
+  --warn: #b45309;
+  --warn-soft: rgba(180, 83, 9, 0.12);
+  --warn-text: #92400e;
+  --bad: #b91c1c;
+  --bad-soft: rgba(185, 28, 28, 0.1);
+  --bad-text: #991b1b;
+  --on-accent: #fffaf3;
+
+  --overlay: #fffdf8;
+  --fill: #f3efe6;
+  --fill-light: #eae4d8;
+  --mask: rgba(60, 50, 30, 0.35);
+  --glow-1: #c2410c;
+  --glow-2: #0f766e;
+}
+
+/* 天青：冷白 + 蓝/靛（亮色） */
+[data-theme='sky'] {
+  --bg: #f3f6f9;
+  --bg-2: #e9eef4;
+  --rail: #eef2f7;
+  --card: rgba(255, 255, 255, 0.84);
+  --card-solid: #ffffff;
+  --card-hi: rgba(255, 255, 255, 0.94);
+  --card-grad: linear-gradient(158deg, rgba(255, 255, 255, 0.96) 0%, rgba(235, 242, 249, 0.98) 100%);
+  --inset: rgba(20, 40, 70, 0.05);
+
+  --line: rgba(40, 85, 150, 0.15);
+  --line-strong: rgba(40, 85, 150, 0.27);
+  --tint: rgba(30, 50, 80, 0.06);
+  --tint-strong: rgba(30, 50, 80, 0.12);
+
+  --text: #1f2a37;
+  --text-2: #55657a;
+  --text-3: #8291a6;
+
+  --mint: #0284c7;
+  --cyan: #4f46e5;
+  --grad: linear-gradient(135deg, #0284c7 0%, #4f46e5 100%);
+  --mint-soft: rgba(2, 132, 199, 0.1);
+  --warn: #b45309;
+  --warn-soft: rgba(180, 83, 9, 0.12);
+  --warn-text: #92400e;
+  --bad: #b91c1c;
+  --bad-soft: rgba(185, 28, 28, 0.1);
+  --bad-text: #991b1b;
+  --on-accent: #f8fbff;
+
+  --overlay: #ffffff;
+  --fill: #eef3f8;
+  --fill-light: #e3ebf3;
+  --mask: rgba(20, 40, 70, 0.35);
+  --glow-1: #0284c7;
+  --glow-2: #4f46e5;
+}
+
+/* 薄荷：白 + 绿/青（亮色） */
+[data-theme='mintlight'] {
+  --bg: #f2f8f4;
+  --bg-2: #e8f2eb;
+  --rail: #eef6f0;
+  --card: rgba(255, 255, 255, 0.84);
+  --card-solid: #ffffff;
+  --card-hi: rgba(255, 255, 255, 0.94);
+  --card-grad: linear-gradient(158deg, rgba(255, 255, 255, 0.96) 0%, rgba(233, 246, 238, 0.98) 100%);
+  --inset: rgba(20, 60, 40, 0.05);
+
+  --line: rgba(20, 105, 75, 0.15);
+  --line-strong: rgba(20, 105, 75, 0.27);
+  --tint: rgba(20, 60, 40, 0.06);
+  --tint-strong: rgba(20, 60, 40, 0.12);
+
+  --text: #1d2b24;
+  --text-2: #51685c;
+  --text-3: #7f958a;
+
+  --mint: #059669;
+  --cyan: #0d9488;
+  --grad: linear-gradient(135deg, #059669 0%, #0d9488 100%);
+  --mint-soft: rgba(5, 150, 105, 0.1);
+  --warn: #b45309;
+  --warn-soft: rgba(180, 83, 9, 0.12);
+  --warn-text: #92400e;
+  --bad: #b91c1c;
+  --bad-soft: rgba(185, 28, 28, 0.1);
+  --bad-text: #991b1b;
+  --on-accent: #f2fbf6;
+
+  --overlay: #ffffff;
+  --fill: #edf7f1;
+  --fill-light: #e1efe7;
+  --mask: rgba(20, 60, 40, 0.35);
+  --glow-1: #059669;
+  --glow-2: #0d9488;
+}
+
+/* 石墨：中性灰蓝（暗色，低饱和） */
+[data-theme='graphite'] {
+  --bg: #0e1012;
+  --bg-2: #121518;
+  --rail: #111417;
+  --card: rgba(30, 35, 40, 0.72);
+  --card-solid: #161a1e;
+  --card-hi: rgba(40, 46, 52, 0.72);
+  --card-grad: linear-gradient(158deg, rgba(36, 42, 48, 0.75) 0%, rgba(18, 22, 26, 0.92) 100%);
+  --inset: rgba(8, 10, 12, 0.55);
+
+  --line: rgba(200, 215, 230, 0.09);
+  --line-strong: rgba(200, 215, 230, 0.16);
+  --tint: rgba(255, 255, 255, 0.06);
+  --tint-strong: rgba(255, 255, 255, 0.1);
+
+  --text: #e8edf2;
+  --text-2: #9aa6b2;
+  --text-3: #6b7885;
+
+  --mint: #7dd3fc;
+  --cyan: #cbd5e1;
+  --grad: linear-gradient(135deg, #7dd3fc 0%, #cbd5e1 100%);
+  --mint-soft: rgba(125, 211, 252, 0.12);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.12);
+  --warn-text: #fcd34d;
+  --bad: #f87171;
+  --bad-soft: rgba(248, 113, 113, 0.12);
+  --bad-text: #fca5a5;
+  --on-accent: #0b1117;
+
+  --overlay: #161b20;
+  --fill: #12171c;
+  --fill-light: #1b232a;
+  --mask: rgba(6, 8, 10, 0.72);
+  --glow-1: #7dd3fc;
+  --glow-2: #cbd5e1;
+}
+
+/* 酒红：深酒 + 玫红（暗色） */
+[data-theme='wine'] {
+  --bg: #140a0e;
+  --bg-2: #1b0e13;
+  --rail: #180c11;
+  --card: rgba(44, 22, 30, 0.72);
+  --card-solid: #221119;
+  --card-hi: rgba(56, 30, 40, 0.72);
+  --card-grad: linear-gradient(158deg, rgba(56, 30, 40, 0.72) 0%, rgba(28, 14, 20, 0.92) 100%);
+  --inset: rgba(10, 5, 8, 0.55);
+
+  --line: rgba(255, 160, 180, 0.1);
+  --line-strong: rgba(255, 160, 180, 0.17);
+  --tint: rgba(255, 255, 255, 0.06);
+  --tint-strong: rgba(255, 255, 255, 0.1);
+
+  --text: #fbe9ee;
+  --text-2: #c9a3af;
+  --text-3: #906a78;
+
+  --mint: #fb7185;
+  --cyan: #f0abfc;
+  --grad: linear-gradient(135deg, #fb7185 0%, #f0abfc 100%);
+  --mint-soft: rgba(251, 113, 133, 0.14);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.12);
+  --warn-text: #fcd34d;
+  --bad: #ef4444;
+  --bad-soft: rgba(239, 68, 68, 0.12);
+  --bad-text: #fecaca;
+  --on-accent: #2a0710;
+
+  --overlay: #26131c;
+  --fill: #1a0d14;
+  --fill-light: #2c1822;
+  --mask: rgba(8, 3, 6, 0.75);
+  --glow-1: #fb7185;
+  --glow-2: #f0abfc;
+}
+
+/* 森野：深林 + 黄绿（暗色） */
+[data-theme='forest'] {
+  --bg: #0b1410;
+  --bg-2: #0f1b16;
+  --rail: #0d1914;
+  --card: rgba(26, 48, 38, 0.72);
+  --card-solid: #143026;
+  --card-hi: rgba(34, 60, 48, 0.72);
+  --card-grad: linear-gradient(158deg, rgba(34, 60, 48, 0.72) 0%, rgba(16, 36, 28, 0.92) 100%);
+  --inset: rgba(6, 12, 9, 0.55);
+
+  --line: rgba(170, 240, 190, 0.09);
+  --line-strong: rgba(170, 240, 190, 0.16);
+  --tint: rgba(255, 255, 255, 0.06);
+  --tint-strong: rgba(255, 255, 255, 0.1);
+
+  --text: #e8f5ec;
+  --text-2: #a6c4b0;
+  --text-3: #729383;
+
+  --mint: #4ade80;
+  --cyan: #a3e635;
+  --grad: linear-gradient(135deg, #4ade80 0%, #a3e635 100%);
+  --mint-soft: rgba(74, 222, 128, 0.14);
+  --warn: #facc15;
+  --warn-soft: rgba(250, 204, 21, 0.12);
+  --warn-text: #fde047;
+  --bad: #f87171;
+  --bad-soft: rgba(248, 113, 113, 0.12);
+  --bad-text: #fca5a5;
+  --on-accent: #052e16;
+
+  --overlay: #12301f;
+  --fill: #0e2119;
+  --fill-light: #18382a;
+  --mask: rgba(4, 10, 6, 0.72);
+  --glow-1: #4ade80;
+  --glow-2: #a3e635;
+}
+
+/* 樱粉：粉白 + 玫红（亮色） */
+[data-theme='blossom'] {
+  --bg: #fdf4f6;
+  --bg-2: #f8e9ee;
+  --rail: #fbeff2;
+  --card: rgba(255, 255, 255, 0.86);
+  --card-solid: #ffffff;
+  --card-hi: rgba(255, 255, 255, 0.95);
+  --card-grad: linear-gradient(158deg, rgba(255, 255, 255, 0.97) 0%, rgba(251, 238, 242, 0.98) 100%);
+  --inset: rgba(120, 60, 80, 0.05);
+
+  --line: rgba(150, 60, 90, 0.15);
+  --line-strong: rgba(150, 60, 90, 0.27);
+  --tint: rgba(150, 60, 90, 0.06);
+  --tint-strong: rgba(150, 60, 90, 0.12);
+
+  --text: #3b2430;
+  --text-2: #7d5566;
+  --text-3: #a88394;
+
+  --mint: #be123c;
+  --cyan: #a21caf;
+  --grad: linear-gradient(135deg, #be123c 0%, #a21caf 100%);
+  --mint-soft: rgba(190, 18, 60, 0.1);
+  --warn: #b45309;
+  --warn-soft: rgba(180, 83, 9, 0.12);
+  --warn-text: #92400e;
+  --bad: #b91c1c;
+  --bad-soft: rgba(185, 28, 28, 0.1);
+  --bad-text: #991b1b;
+  --on-accent: #fff5f8;
+
+  --overlay: #ffffff;
+  --fill: #fbeef2;
+  --fill-light: #f6e2e9;
+  --mask: rgba(90, 40, 60, 0.32);
+  --glow-1: #be123c;
+  --glow-2: #a21caf;
+}
+
+/* 雾灰：冷灰 + 石墨蓝（亮色） */
+[data-theme='slate'] {
+  --bg: #f4f5f7;
+  --bg-2: #e9ebef;
+  --rail: #eef0f3;
+  --card: rgba(255, 255, 255, 0.86);
+  --card-solid: #ffffff;
+  --card-hi: rgba(255, 255, 255, 0.95);
+  --card-grad: linear-gradient(158deg, rgba(255, 255, 255, 0.97) 0%, rgba(240, 242, 245, 0.98) 100%);
+  --inset: rgba(40, 50, 70, 0.05);
+
+  --line: rgba(50, 60, 80, 0.14);
+  --line-strong: rgba(50, 60, 80, 0.26);
+  --tint: rgba(50, 60, 80, 0.06);
+  --tint-strong: rgba(50, 60, 80, 0.12);
+
+  --text: #22272e;
+  --text-2: #5a6472;
+  --text-3: #8b95a3;
+
+  --mint: #475569;
+  --cyan: #0f766e;
+  --grad: linear-gradient(135deg, #475569 0%, #0f766e 100%);
+  --mint-soft: rgba(71, 85, 105, 0.1);
+  --warn: #b45309;
+  --warn-soft: rgba(180, 83, 9, 0.12);
+  --warn-text: #92400e;
+  --bad: #b91c1c;
+  --bad-soft: rgba(185, 28, 28, 0.1);
+  --bad-text: #991b1b;
+  --on-accent: #f8fafc;
+
+  --overlay: #ffffff;
+  --fill: #eff1f4;
+  --fill-light: #e4e7ec;
+  --mask: rgba(30, 40, 55, 0.32);
+  --glow-1: #475569;
+  --glow-2: #0f766e;
+}
+
+/* 奶油：奶油黄 + 琥珀（亮色） */
+[data-theme='cream'] {
+  --bg: #fdf8ec;
+  --bg-2: #f7efd9;
+  --rail: #faf3e3;
+  --card: rgba(255, 255, 255, 0.88);
+  --card-solid: #fffdf6;
+  --card-hi: rgba(255, 255, 255, 0.96);
+  --card-grad: linear-gradient(158deg, rgba(255, 253, 246, 0.97) 0%, rgba(251, 243, 223, 0.98) 100%);
+  --inset: rgba(120, 90, 30, 0.05);
+
+  --line: rgba(140, 100, 30, 0.16);
+  --line-strong: rgba(140, 100, 30, 0.28);
+  --tint: rgba(140, 100, 30, 0.06);
+  --tint-strong: rgba(140, 100, 30, 0.12);
+
+  --text: #3a2f1b;
+  --text-2: #7a6a4d;
+  --text-3: #a89674;
+
+  --mint: #b45309;
+  --cyan: #0f766e;
+  --grad: linear-gradient(135deg, #b45309 0%, #0f766e 100%);
+  --mint-soft: rgba(180, 83, 9, 0.1);
+  --warn: #b45309;
+  --warn-soft: rgba(180, 83, 9, 0.12);
+  --warn-text: #92400e;
+  --bad: #b91c1c;
+  --bad-soft: rgba(185, 28, 28, 0.1);
+  --bad-text: #991b1b;
+  --on-accent: #fffbf0;
+
+  --overlay: #fffdf6;
+  --fill: #faf3e1;
+  --fill-light: #f4e8cc;
+  --mask: rgba(80, 60, 20, 0.32);
+  --glow-1: #b45309;
+  --glow-2: #0f766e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  font-family:
+    'Segoe UI Variable Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono {
+  font-family: 'Cascadia Mono', 'Segoe UI Mono', Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 细微的顶部光晕：让整块深色不显得死板 */
+#app {
+  background:
+    radial-gradient(900px 420px at 12% -8%, color-mix(in srgb, var(--mint) 10%, transparent), transparent 62%),
+    radial-gradient(760px 380px at 92% -4%, color-mix(in srgb, var(--cyan) 8%, transparent), transparent 60%),
+    var(--bg);
+}
+
+/* ───────────── 外壳 ───────────── */
+
+.app-shell {
+  height: 100%;
+}
+
+/* 侧栏中部的弹性留白：把"运行状态 / 快速呼出 / 导航 / 版本"压到左下角。
+   之前这条规则在改样式时被误删，于是整组元素紧跟隧道列表，看起来像"挨着隧道"。 */
+.rail .spacer {
+  flex: 1 1 auto;
+  min-height: 16px;
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  width: 208px;
+  flex-shrink: 0;
+  padding: 14px 12px 12px;
+  background: var(--rail);
+  border-right: 1px solid var(--line);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 6px 16px;
+}
+
+.brand img {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--mint) 18%, transparent);
+}
+
+.brand-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 1.6px;
+}
+
+.brand-sub {
+  margin-top: 3px;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  color: var(--text-3);
+}
+
+.rail-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 8px;
+}
+
+.rail-section-k {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.4px;
+  color: var(--text-3);
+}
+
+.rail-section-n {
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--tint-strong);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--text-2);
+}
+
+.new-conn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  height: 34px;
+  margin-bottom: 8px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease,
+    background 140ms ease;
+}
+
+.new-conn:hover {
+  border-color: color-mix(in srgb, var(--mint) 40%, transparent);
+  background: color-mix(in srgb, var(--mint) 6%, transparent);
+  color: var(--text);
+}
+
+.new-conn-icon {
+  font-size: 14px;
+  line-height: 1;
+  color: var(--mint);
+}
+
+.conn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.conn-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-2);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.conn-item:hover {
+  background: var(--tint);
+}
+
+.conn-item.is-active {
+  border-color: color-mix(in srgb, var(--mint) 35%, transparent);
+  background: linear-gradient(100deg, color-mix(in srgb, var(--mint) 14%, transparent), color-mix(in srgb, var(--cyan) 5%, transparent));
+}
+
+.conn-avatar {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--mint) 14%, transparent);
+  color: var(--mint);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.conn-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.conn-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conn-host {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conn-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: var(--tint);
+  font-size: 10px;
+  line-height: 18px;
+  text-align: center;
+  color: var(--text-2);
+}
+
+.rail-empty {
+  padding: 12px 8px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.rail-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--mint) 6%, transparent);
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.rail-shortcut {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.rail-shortcut svg {
+  width: 14px;
+  height: 14px;
+}
+
+kbd {
+  min-width: 22px;
+  padding: 2px 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--tint);
+  font-family: inherit;
+  font-size: 9.5px;
+  text-align: center;
+  color: var(--text-2);
+}
+
+.rail-shortcut kbd:first-of-type {
+  margin-left: auto;
+}
+
+.rail-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 6px;
+}
+
+.rail-tab {
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: 0 8px 8px 0;
+  background: transparent;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 130ms ease,
+    color 130ms ease;
+}
+
+.rail-tab:hover {
+  background: var(--tint);
+  color: var(--text);
+}
+
+.rail-tab.is-active {
+  border-left-color: var(--mint);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--mint) 16%, transparent), transparent 80%);
+  color: var(--text);
+}
+
+/* 侧栏底部的服务开关 */
+.rail-cta {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--mint) 14%, transparent), color-mix(in srgb, var(--cyan) 5%, transparent));
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+
+.rail-cta:hover {
+  border-color: color-mix(in srgb, var(--mint) 32%, transparent);
+}
+
+.rail-cta-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.rail-cta-sub {
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+/* 核心状态块已从侧栏最底部上移到「隧道计数」与「快速呼出」之间，
+   所以去掉原来用于压底的顶部大留白，只保留行内微间距 */
+.rail-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 5px;
+  padding: 2px 10px 2px;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+/* 状态文字整组占住左端，把刷新按钮与版本压到右端；
+   否则字体稍宽（如「核心不可达」）就会把版本挤到第二行。 */
+.rail-core {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-right: auto;
+}
+
+.rail-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 0;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.rail-refresh:hover {
+  background: var(--tint);
+  color: var(--text);
+}
+
+.rail-refresh:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.rail-refresh svg {
+  width: 13px;
+  height: 13px;
+}
+
+.rail-ver {
+  opacity: 0.7;
+}
+
+.notice {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 22px 0;
+}
+
+.offline-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--warn) 28%, transparent);
+  border-radius: var(--r-md);
+  background: var(--warn-soft);
+  font-size: 11.5px;
+  color: var(--warn-text);
+}
+
+.offline-banner button {
+  margin-left: auto;
+}
+
+.offline-banner button {
+  height: 26px;
+}
+
+/* ───────────── 主区 ───────────── */
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.page-wrap {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 20px 22px 30px;
+}
+
+/* 面包屑式的小标题 */
+.eyebrow {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.6px;
+  color: var(--text-3);
+}
+
+.eyebrow.is-accent {
+  color: var(--mint);
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.head-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.head-title h1 {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+}
+
+.head-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.head-meta .sep {
+  color: var(--text-3);
+}
+
+.head-meta .mono {
+  font-size: 11.5px;
+}
+
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+/* ───────────── 按钮 ───────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--tint);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    opacity 140ms ease;
+}
+
+.btn:hover {
+  background: var(--tint-strong);
+}
+
+/* 内联 SVG 没有宽高属性时会被撑到容器大小，必须显式约束 */
+.btn svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.btn {
+  white-space: nowrap;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn.is-primary {
+  border-color: transparent;
+  background: var(--grad);
+  color: var(--on-accent);
+  font-weight: 650;
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--mint) 22%, transparent);
+}
+
+.btn.is-primary:hover {
+  filter: brightness(1.06);
+}
+
+.btn.is-danger {
+  border-color: color-mix(in srgb, var(--bad) 30%, transparent);
+  background: var(--bad-soft);
+  color: var(--bad-text);
+}
+
+.btn.is-wide {
+  width: 100%;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--tint);
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    color 140ms ease,
+    border-color 140ms ease;
+}
+
+.icon-btn:hover {
+  background: var(--tint-strong);
+  color: var(--text);
+}
+
+.icon-btn.is-danger:hover {
+  border-color: color-mix(in srgb, var(--bad) 34%, transparent);
+  color: var(--bad-text);
+}
+
+.icon-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* ───────────── 状态 ───────────── */
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+  flex-shrink: 0;
+}
+
+.dot.is-on {
+  background: var(--mint);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mint) 16%, transparent);
+}
+
+.dot.is-warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px var(--warn-soft);
+}
+
+.dot.is-bad {
+  background: var(--bad);
+  box-shadow: 0 0 0 3px var(--bad-soft);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.pill.is-on {
+  /* 用主题的强调色而不是写死的浅绿：亮色主题下浅绿在浅底上看不清。 */
+  color: var(--mint);
+  background: color-mix(in srgb, var(--mint) 13%, transparent);
+  border-color: color-mix(in srgb, var(--mint) 28%, transparent);
+}
+
+.pill.is-off {
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border-color: var(--line);
+}
+
+.pill.is-warn {
+  color: var(--warn-text);
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 28%, transparent);
+}
+
+.pill.is-bad {
+  color: var(--bad-text);
+  background: var(--bad-soft);
+  border-color: color-mix(in srgb, var(--bad) 28%, transparent);
+}
+
+/* 开关 */
+.sw {
+  position: relative;
+  width: 38px;
+  height: 21px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--tint);
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.sw::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--line-strong);
+  transition:
+    transform 160ms ease,
+    background 160ms ease;
+}
+
+.sw.is-on {
+  border-color: transparent;
+  background: var(--grad);
+}
+
+.sw.is-on::after {
+  transform: translateX(17px);
+  background: var(--on-accent);
+}
+
+.sw:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ───────────── SSH SERVER 卡片 ───────────── */
+
+.server-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  /* 和转发卡片共用一套渐变：写死深色的话，亮色主题下会突然出现一块深色区域。 */
+  background:
+    radial-gradient(520px 200px at 88% -30%, color-mix(in srgb, var(--cyan) 10%, transparent), transparent 70%),
+    var(--card-grad);
+  box-shadow: var(--shadow-card);
+}
+
+.server-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border: 1px solid color-mix(in srgb, var(--mint) 24%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--mint) 10%, transparent);
+  color: var(--mint);
+}
+
+.server-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.server-body {
+  min-width: 0;
+}
+
+.server-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.server-addr {
+  margin-top: 8px;
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.server-desc {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg) 50%, transparent);
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+
+.tag svg {
+  width: 12px;
+  height: 12px;
+  color: var(--mint);
+}
+
+.server-actions {
+  display: flex;
+  gap: 8px;
+  align-self: center;
+  flex-shrink: 0;
+}
+
+/* 按钮里的图标 + 两字中文容易被挤到换行 */
+.server-actions .btn {
+  white-space: nowrap;
+}
+
+.server-actions .btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.server-error {
+  margin-top: 10px;
+  padding: 9px 12px;
+  border-left: 2px solid var(--bad);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  background: var(--bad-soft);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--bad-text);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ───────────── 隧道切换 ───────────── */
+
+.chips {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--text-2);
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease;
+}
+
+.chip:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.chip.is-active {
+  border-color: color-mix(in srgb, var(--mint) 40%, transparent);
+  background: color-mix(in srgb, var(--mint) 10%, transparent);
+  color: var(--text);
+}
+
+.chip-name {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chip-host {
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+/* ───────────── 区块与卡片 ───────────── */
+
+.section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 24px 0 12px;
+  flex-wrap: wrap;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.section-head h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+}
+
+.count {
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--tint-strong);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  color: var(--text-2);
+}
+
+.running {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--mint);
+}
+
+.section-sub {
+  margin: 5px 0 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+/* 从「应用」「所有转发」跳转过来时闪一下：让用户知道落点是哪张卡 */
+.fcard.is-focus {
+  outline: 2px solid color-mix(in srgb, var(--mint) 70%, transparent);
+  outline-offset: 2px;
+  animation: fcard-focus 1.6s ease;
+}
+
+@keyframes fcard-focus {
+  0%,
+  100% {
+    outline-color: transparent;
+  }
+  15%,
+  70% {
+    outline-color: color-mix(in srgb, var(--mint) 70%, transparent);
+  }
+}
+
+.fcard {
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(360px 140px at 100% 0%, color-mix(in srgb, var(--cyan) 7%, transparent), transparent 70%),
+    var(--card-grad);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    var(--shadow-card);
+  transition:
+    border-color 150ms ease,
+    transform 150ms ease;
+}
+
+.fcard:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+}
+
+.fcard-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fcard-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.fcard-title span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.auto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+/* 卡片身份区：图标 + 名称 + 连接数 */
+.fcard-id {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  min-width: 0;
+}
+
+.fcard-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg) 50%, transparent);
+  color: var(--mint);
+}
+
+.fcard-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* 配色随协议走，与应用页磁贴同一套语义：web 薄荷、ssh 青、rdp 橙、tcp 中性 */
+.fcard-icon.is-ssh {
+  color: var(--cyan);
+}
+
+.fcard-icon.is-rdp {
+  color: var(--warn);
+}
+
+.fcard-icon.is-tcp {
+  color: var(--text-2);
+}
+
+/* 站点自己的图标自带底色，再套一层描边只会显得脏 */
+.fcard-icon.has-image {
+  border-color: transparent;
+  background: transparent;
+}
+
+.fcard-icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: inherit;
+}
+
+.fcard-idtext {
+  min-width: 0;
+}
+
+.fcard-name {
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fcard-sub {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.tcp-hint {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--line);
+  border-radius: var(--r-sm);
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.fcard-foot-spacer {
+  flex: 1;
+}
+
+/* 本地 → 远端 映射条 */
+.map {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--fill);
+  border: 1px solid var(--line);
+}
+
+.map-side {
+  min-width: 0;
+  flex: 1;
+}
+
+.map-k {
+  font-size: 9.5px;
+  letter-spacing: 0.8px;
+  color: var(--text-3);
+}
+
+.map-v {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.map-arrow {
+  color: var(--mint);
+  opacity: 0.8;
+  flex-shrink: 0;
+}
+
+.url-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--bg) 40%, transparent);
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.url-row span {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.copy-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+}
+
+.copy-btn:hover {
+  color: var(--mint);
+}
+
+.copy-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.fcard-reason {
+  /* 长错误最多占三行，卡片不能被一段堆栈撑爆 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--warn);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--warn-soft);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--warn-text);
+}
+
+.fcard-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.fcard-foot .btn {
+  flex: 1;
+}
+
+.foot-note svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.foot-note {
+  margin: 18px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+/* ───────────── 空状态 / 密钥确认 ───────────── */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 40px 20px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-lg);
+  color: var(--text-3);
+  text-align: center;
+}
+
+.empty img {
+  width: 38px;
+  height: 38px;
+  opacity: 0.55;
+  margin-bottom: 4px;
+}
+
+.empty-title {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.trust {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--warn) 28%, transparent);
+  border-radius: var(--r-lg);
+  background: var(--warn-soft);
+}
+
+.trust-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warn-text);
+  margin-bottom: 7px;
+}
+
+.fp {
+  font-family: 'Cascadia Mono', 'Segoe UI Mono', Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-2);
+  word-break: break-all;
+  user-select: all;
+}
+
+.trust-ops {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.known-note {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.known-note.ok {
+  color: var(--mint);
+}
+
+.known-note.bad {
+  color: var(--bad);
+}
+
+.known-note.dim {
+  color: var(--text-3);
+}
+
+/* ───────────── Element Plus 收口 ───────────── */
+
+.el-button {
+  font-family: inherit;
+}
+
+.el-dialog {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  /* 写死深色的话，亮色主题下新建/编辑弹窗里外全是黑的。 */
+  background: var(--overlay);
+  box-shadow: var(--shadow-pop);
+}
+
+.el-dialog__header {
+  margin-right: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.el-dialog__title {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  box-shadow: 0 0 0 1px var(--line) inset;
+}
+
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus,
+.el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--mint) 55%, transparent) inset;
+}
+
+.el-alert {
+  border-radius: var(--r-md);
+}
+
+.log-view {
+  /* 原来写死深色，亮色主题下像一块黑膏药；跟随主题的输入区底色。 */
+  background: var(--fill);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 14px 16px;
+  font-family: 'Cascadia Mono', 'Segoe UI Mono', Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+  height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-2);
+}
+
+code {
+  font-family: 'Cascadia Mono', 'Segoe UI Mono', Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+/* ───────────── 日志 / 设置 ───────────── */
+
+.padded {
+  padding: 20px 22px 28px;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+}
+
+.panel {
+  padding: 16px 18px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+}
+
+.kbd-group {
+  display: flex;
+  gap: 5px;
+}
+
+.service-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.service-row .btn {
+  height: 28px;
+}
+
+.panel-title {
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+/* ───────────── 滚动条 ───────────── */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--tint-strong);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--tint-strong);
+  background-clip: content-box;
+}
+
+/* ───────────── 窄窗口 ───────────── */
+
+@media (max-width: 900px) {
+  .rail {
+    width: 64px;
+    padding: 12px 8px;
+  }
+
+  .brand {
+    justify-content: center;
+    padding-bottom: 12px;
+  }
+
+  .brand-text,
+  .rail-cta-sub,
+  .rail-ver,
+  .nav-label,
+  .nav-count {
+    display: none;
+  }
+
+  .nav-item {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .rail-cta {
+    padding: 10px;
+    text-align: center;
+  }
+
+  .rail-cta-main {
+    justify-content: center;
+    font-size: 0;
+    gap: 0;
+  }
+
+  .rail-foot {
+    justify-content: center;
+    font-size: 0;
+  }
+
+  .main {
+    padding: 16px 14px 24px;
+  }
+
+  .hero {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 16px 16px 0;
+  }
+
+  .hero-diagram {
+    display: none;
+  }
+
+  .hero-stats {
+    margin: 14px -16px 0;
+  }
+
+  .hero-stat {
+    padding: 10px 16px;
+  }
+}
+
+/* ───────────── 流光边框（已连接 / 运行中） ─────────────
+ *
+ * 做法：::before 画一圈 conic-gradient，再用 mask 只留 1px 边；
+ * 配合 @property 让 --angle 可动画，光就沿着边框转。
+ * 不支持 @property 的旧内核会退化成静止的一圈淡光，不影响可读性。
+ */
+
+@property --tl-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.is-live {
+  position: relative;
+  isolation: isolate;
+}
+
+.is-live::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--tl-angle),
+    transparent 0deg,
+    color-mix(in srgb, var(--mint) 5%, transparent) 40deg,
+    color-mix(in srgb, var(--mint) 85%, transparent) 78deg,
+    color-mix(in srgb, var(--cyan) 95%, transparent) 96deg,
+    color-mix(in srgb, var(--mint) 5%, transparent) 134deg,
+    transparent 180deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: tl-flow 3.4s linear infinite;
+  /* 提到独立合成层：WebView2 偶发不启动 @property 动画，加这行能稳定触发。 */
+  will-change: --tl-angle;
+  pointer-events: none;
+}
+
+/* 外发光：让"活着"这件事在余光里也能看见 */
+.is-live {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 0 0 1px color-mix(in srgb, var(--mint) 12%, transparent),
+    0 18px 40px rgba(0, 0, 0, 0.32);
+}
+
+@keyframes tl-flow {
+  to {
+    --tl-angle: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .is-live::before {
+    /*
+     * 这圈光是「隧道正在运行」的状态指示，不是装饰性动效。
+     * 完全静止会让用户以为转发没在跑，所以这里只放慢，不停掉。
+     */
+    animation-duration: 9s;
+  }
+}
+
+/* 设置页的信息表：Element 的默认表格在深色里是灰白块，统一到卡片质感 */
+.el-descriptions {
+  --el-descriptions-table-border: var(--line);
+  background: transparent;
+}
+
+.el-descriptions__body,
+.el-descriptions__table {
+  background: transparent;
+}
+
+/* ───────────── 配置导入导出 ───────────── */
+
+/* 勾选树：连接一行、转发缩进一行；行内右侧放数量/协议徽标 */
+.pf-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 10px 0 8px;
+}
+
+.pf-search {
+  flex: 1;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--tint);
+  color: inherit;
+  font: inherit;
+}
+
+.pf-search:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--mint) 45%, var(--line));
+}
+
+.pf-tree {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pf-node {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.pf-node:last-child {
+  border-bottom: none;
+}
+
+.pf-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+}
+
+.pf-sub {
+  margin: 0;
+  padding: 0 0 0 22px;
+  list-style: none;
+}
+
+.pf-sub .pf-line {
+  min-height: 24px;
+}
+
+.pf-name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pf-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.pf-badge {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--tint-strong);
+  color: var(--text-2);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.pf-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+/* 导入预览：每条的目的地、动作、冲突原因 */
+.pf-review {
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pf-review-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.pf-review-row:last-child {
+  border-bottom: none;
+}
+
+.pf-review-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pf-review-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pf-reason {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--warn);
+}
+
+.pf-port {
+  width: 92px;
+}
+
+.pf-sub-review {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  padding: 0 0 0 14px;
+  list-style: none;
+}
+
+.pf-sub-review .pf-review-row {
+  border-bottom: none;
+  padding: 4px 0;
+}
+
+/* 侧栏里的「待填密码」：导入的连接缺登录材料，用暖色小标签提示，不抢状态点的位置 */
+.conn-badge {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
+  color: var(--warn);
+  font-size: 10px;
+  font-weight: 600;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+
+.el-descriptions__cell,
+.el-descriptions__label,
+.el-descriptions__content {
+  background: color-mix(in srgb, var(--bg) 40%, transparent) !important;
+  color: var(--text-2) !important;
+  border-color: var(--line) !important;
+}
+
+.el-descriptions__label {
+  color: var(--text-3) !important;
+  width: 110px;
+}
+
+/* ───────────── 搜索框 / 卡片备注 ───────────── */
+
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.search {
+  width: 230px;
+  height: 32px;
+  padding: 0 12px 0 30px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg) 50%, transparent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%236f8a87' stroke-width='1.4' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.5'/%3E%3Cpath d='M10.5 10.5L14 14'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 9px center;
+  background-size: 14px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+  transition:
+    border-color 130ms ease,
+    box-shadow 130ms ease;
+}
+
+.search::placeholder {
+  color: var(--text-3);
+}
+
+.search:focus {
+  border-color: color-mix(in srgb, var(--mint) 50%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mint) 10%, transparent);
+}
+
+.fcard-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fcard-note {
+  min-width: 0;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fcard-note::before {
+  content: '· ';
+  color: var(--text-3);
+}
+
+/* 速率统一配色：上行 = 薄荷绿，下行 = 天蓝。同一个颜色配两个箭头最容易看错。 */
+.rate-up {
+  color: var(--mint);
+}
+
+.rate-down {
+  color: var(--cyan);
+  margin-left: 4px;
+}
+
+/* 卡片副标题里的速率：与连接数同排，用等宽数字避免宽度抖动 */
+.fcard-speed {
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tag.is-rate {
+  font-variant-numeric: tabular-nums;
+  color: var(--mint);
+}
+
+/* 底部状态行改成两行：速率单独占一行，否则会把"核心在线"挤成竖排 */
+.rail-foot {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.rail-rate {
+  flex: 0 0 100%;
+  margin-left: 14px;
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.rail-foot .rail-ver {
+  white-space: nowrap;
+}
+
+.btn.is-icon {
+  width: 32px;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.btn.is-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* 排序弹窗里的列表：拖动时给出明确的"正在被拖"的视觉 */
+.order-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.order-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--bg) 45%, transparent);
+  cursor: grab;
+  /* 文本可选择会把拖拽变成"选中文字"，WebView2 上必须关掉 */
+  user-select: none;
+  /* 千万不要加 -webkit-user-drag: element：它会让浏览器再起一次**原生**拖拽，
+     与我们自己的指针拖拽打架，光标变成"禁止"图标。 */
+  -webkit-user-drag: none;
+}
+
+.order-item.is-dragging {
+  opacity: 0.9;
+  cursor: grabbing;
+  border-color: color-mix(in srgb, var(--mint) 45%, transparent);
+  background: color-mix(in srgb, var(--mint) 7%, transparent);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+}
+
+.order-item.is-over {
+  border-color: color-mix(in srgb, var(--mint) 55%, transparent);
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--mint) 55%, transparent);
+}
+
+.order-item.is-dragging {
+  border-color: color-mix(in srgb, var(--mint) 45%, transparent);
+  background: color-mix(in srgb, var(--mint) 8%, transparent);
+}
+
+.order-grip {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  color: var(--text-3);
+}
+
+.order-grip svg {
+  width: 12px;
+  height: 12px;
+}
+
+.order-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.order-name {
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.order-host {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.order-item .icon-btn {
+  width: 24px;
+  height: 24px;
+}
+
+.order-item .icon-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* 侧栏隧道行里的速率：比 host 更弱，只在有流量时出现 */
+.conn-speed {
+  display: block;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--mint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ───────────── 主题选择 ───────────── */
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.theme-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px;
+  /*
+   * 卡片背景来自「被预览的那套主题」，文字也用那套主题的变量（模板上挂了 data-theme）。
+   * 边框不能用 var(--line)：深色主题的 --line 是白色半透明，画在浅色卡片上等于没有。
+   */
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+
+.theme-card:hover {
+  border-color: rgba(128, 128, 128, 0.55);
+  transform: translateY(-1px);
+}
+
+.theme-card.is-active {
+  border-color: var(--mint);
+  box-shadow: 0 0 0 1px var(--mint) inset;
+}
+
+.theme-swatch {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+
+.theme-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+}
+
+.theme-name {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.theme-hint {
+  font-size: 9.5px;
+  color: var(--text-3);
+}
+
+/* 卡片头部的开关：没有文字标签时自己右对齐 */
+.sw-standalone {
+  margin-left: auto;
+}
+
+/* 转发表单里的图标导入行：缩略图 + URL + 导入 / 本地文件 / 清除 */
+.icon-edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.icon-thumb {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--tint);
+  object-fit: contain;
+}
+
+.icon-thumb.is-empty {
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.icon-edit .el-input {
+  flex: 1 1 180px;
+  min-width: 140px;
+}

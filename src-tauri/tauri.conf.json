@@ -1,0 +1,59 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Threadline",
+  "mainBinaryName": "Threadline",
+  "version": "0.2.0",
+  "identifier": "io.github.zlyuancn.threadline",
+  "build": {
+    "frontendDist": "../dist",
+    "beforeBuildCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prebuild.ps1"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Threadline · 引线",
+        "width": 1040,
+        "height": 700,
+        "minWidth": 760,
+        "minHeight": 520,
+        "resizable": true,
+        "center": true,
+        "visible": false,
+        "theme": null
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http: https:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:*"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "publisher": "zlyuancn",
+    "copyright": "Copyright 2026 zlyuancn",
+    "shortDescription": "Threadline · 引线 — 把远端服务映射到本机",
+    "targets": ["nsis"],
+    "externalBin": ["binaries/tl-core"],
+    "resources": {
+      "../LICENSE": "LICENSE",
+      "../THIRD_PARTY-NOTICES.md": "THIRD_PARTY-NOTICES.md",
+      "../licenses": "licenses"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

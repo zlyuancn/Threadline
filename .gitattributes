@@ -1,0 +1,23 @@
+# 统一按文本管理并归一为 LF 存储：Windows 上的 CRLF 工作区不会在 PR 里变成整文件 diff。
+* text=auto
+
+# 二进制：不要做行尾转换，也不要参与 diff。
+*.png binary
+*.ico binary
+*.icns binary
+*.exe binary
+*.dll binary
+*.pdb binary
+
+# 锁文件：不做 diff，但仍要归一为 LF 存储（-text 会连行尾归一一起关掉，
+# 那样 Linux/macOS 贡献者重新生成时就是整文件 diff）。
+pnpm-lock.yaml -diff
+Cargo.lock -diff
+
+# Windows 脚本必须保持 CRLF，否则 PowerShell 5.1 解析会出问题。
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Shell 脚本必须 LF，否则 WSL / Git Bash 报 bad interpreter。
+*.sh text eol=lf

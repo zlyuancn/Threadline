@@ -1,0 +1,34 @@
+# Agent（托盘 + 面板壳）。刻意声明空 workspace：让它在 monorepo 里保持独立，
+# 不与 crates/* 共享依赖解析（Tauri 的依赖图很重，混进来会拖慢核心的构建）。
+#
+# 例外：`tl-protocol`。代理例外的 reconcile 必须 Core 与 Agent 用同一套规则，
+# 放 tl-core 则 Agent 依赖不到；它只是零依赖的契约 crate（DTO + 纯函数），
+# 不含业务、不含 Win32，不违反「Agent 不碰核心业务」。
+[workspace]
+
+[package]
+name = "tl-agent"
+version = "0.2.0"
+edition = "2021"
+license-file = "../LICENSE"
+publish = false
+repository = "https://github.com/zlyuancn/Threadline"
+description = "Threadline Agent：托盘与控制面板外壳（无业务状态）"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tl-wake = { path = "../crates/tl-wake" }
+tl-protocol = { path = "../crates/tl-protocol" }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+# 原生文件对话框：导出配置必须让用户选落点（WebView 的 <a download> 会静默写下载目录）
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+base64 = "0.22"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Networking_WinInet", "Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
