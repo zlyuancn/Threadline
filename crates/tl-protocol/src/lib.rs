@@ -421,6 +421,12 @@ pub struct TunnelDto {
     /// 是否出现在「应用」页。老配置没有这个字段时默认显示。
     #[serde(default = "default_true")]
     pub in_app: bool,
+    /// 应用页里的显示顺序（越小越靠前）。
+    ///
+    /// **只被应用页读取**：转发逻辑（fsm / 监听 / 会话 / hosts）完全不看它，
+    /// 改布局不会影响任何一条转发的运行。全为 0 时按配置原顺序稳定排列（旧配置零迁移）。
+    #[serde(default)]
+    pub app_order: i32,
 }
 
 fn default_true() -> bool {
@@ -622,6 +628,354 @@ impl ErrorBody {
             },
         }
     }
+}
+
+// ─────────────────────── 应用页分组（/app-groups） ───────────────────────
+
+/// 应用页的一个分组。
+///
+/// 成员归属仍由 `TunnelDto.group`（组名）决定；这里只负责**组的顺序**与
+/// **空组的存在性**——没有成员的组无法从转发派生，必须单独存一份清单。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppGroup {
+    pub name: String,
+    pub order: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppGroupList {
+    pub items: Vec<AppGroup>,
+}
+
+/// `PUT /app-groups`：全量覆盖（新建、删除空组、调整组顺序）。
+///
+/// 只改清单，不动成员归属：改名/删组请走 `/app-groups/rename|delete`，
+/// 那两个由核心一次改完成员的 `group`，避免前端拆成 N 次写。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetAppGroupsRequest {
+    pub items: Vec<AppGroup>,
+}
+
+/// `POST /app-groups/rename`：改名 + 该组所有成员一起改。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenameAppGroupRequest {
+    pub from: String,
+    pub to: String,
+}
+
+/// `POST /app-groups/delete`：删组 + 成员回落「未分组」。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteAppGroupRequest {
+    pub name: String,
+}
+
+/// `PUT /tunnels/app-order`：应用页磁贴的全局顺序。
+///
+/// 与 `PUT /servers/order` 同规则：顺序在这个数组里，缺席的 id 追加到末尾。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReorderAppRequest {
+    pub ids: Vec<String>,
+}
+
+// ─────────────────────── 服务器管理（/servers/{id}/admin） ───────────────────────
+
+/// 管理页的一个模块。
+///
+/// 清单**由核心给**，前端只按它渲染导航与占位：新增模块时只改核心的清单，
+/// 界面不需要跟着改结构。`state` 说明这一格现在能不能用。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminModule {
+    /// 稳定标识（`overview` / `processes` / `files` …），前端按它选组件。
+    pub id: String,
+    pub title: String,
+    pub state: AdminModuleState,
+    /// 一句话说明：能用时是数据来源，不能用时是原因或"将做什么"。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminModuleState {
+    /// 本期可用。
+    Ready,
+    /// 已规划，尚未实现（界面显示"规划中"，不假装能用）。
+    Planned,
+    /// 这台机器上不可用（缺 docker、非 Linux 等）。
+    Unavailable,
+}
+
+/// `GET /servers/{id}/admin/overview` 的响应。
+///
+/// 一次 SSH exec 采完，所有字段都是"采集到就填、采不到就缺省"：
+/// 单块失败进 `degraded`，不影响其它块。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerOverview {
+    pub collected_at: String,
+    /// 本次采集（含远端二次采样等待）耗时，界面用来判断"是不是卡了"。
+    pub elapsed_ms: u64,
+    pub system: SystemInfo,
+    pub cpu: CpuStat,
+    pub load: LoadStat,
+    pub memory: MemoryStat,
+    /// 内存去向的进一步拆分（VM / 容器 / ZFS ARC）。拿不到时全是 0。
+    #[serde(default)]
+    pub mem_breakdown: MemBreakdown,
+    /// GPU 列表（NVIDIA 走 `nvidia-smi`，否则退回 `/sys/class/drm`）。没有 GPU 时为空。
+    #[serde(default)]
+    pub gpus: Vec<GpuStat>,
+    #[serde(default)]
+    pub disks: Vec<DiskUsage>,
+    /// 物理盘清单（`lsblk`，TYPE=disk）。界面按"盘"展示容量，不看挂载点。
+    #[serde(default)]
+    pub block_disks: Vec<BlockDisk>,
+    /// ZFS 池清单（`zpool list -v`）。没有 ZFS 时为空。
+    #[serde(default)]
+    pub zfs_pools: Vec<ZfsPool>,
+    #[serde(default)]
+    pub network: Vec<NetInterface>,
+    #[serde(default)]
+    pub disk_io: Vec<DiskIo>,
+    #[serde(default)]
+    pub processes: Vec<ProcessRow>,
+    pub containers: ContainerSummary,
+    /// 导航清单（含未实现模块）。
+    #[serde(default)]
+    pub modules: Vec<AdminModule>,
+    /// 采集失败的块，例如 `进程列表`、`容器`。空 = 全部采到。
+    #[serde(default)]
+    pub degraded: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemInfo {
+    pub hostname: String,
+    /// `/etc/os-release` 的 `PRETTY_NAME`；读不到时留空。
+    #[serde(default)]
+    pub os: String,
+    #[serde(default)]
+    pub kernel: String,
+    #[serde(default)]
+    pub arch: String,
+    #[serde(default)]
+    pub uptime_secs: u64,
+    /// 主出口 IPv4（跳过回环）。取不到时留空，界面就不显示这一行。
+    #[serde(default)]
+    pub host_ip: String,
+}
+
+/// 一块**物理盘**（`lsblk` 里 TYPE=disk 的那一层）。
+///
+/// 界面关心的是"这台机器有几块盘、各自用掉多少"，而不是"挂了哪些目录"：
+/// Unraid 会把阵列里的每个共享都挂一遍，按挂载点列出来就是同一块盘重复十几遍。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockDisk {
+    /// 设备名，例如 `nvme0n1`、`sda`。
+    pub name: String,
+    /// 容量（字节，`lsblk -b`）。
+    pub size_bytes: u64,
+    /// 该盘所有已挂载分区的文件系统总量（kB）。0 = 没挂载（例如交给阵列托管）。
+    #[serde(default)]
+    pub total_kb: u64,
+    /// 已用量（kB）。0 = 未知。
+    #[serde(default)]
+    pub used_kb: u64,
+    /// 该盘第一个挂载点，悬停时用来说明"挂在哪"。空 = 未挂载。
+    #[serde(default)]
+    pub mount: String,
+    /// `lsblk` 报的文件系统类型（`ext4`、`zfs_member`…）。空 = 没有文件系统。
+    #[serde(default)]
+    pub fstype: String,
+    /// 所属 ZFS 池名。空 = 不属于任何池，或这台机器没装 ZFS。
+    ///
+    /// ZFS 的成员盘自己**没有挂载点**（池才有），只看 `df` 会以为它们"未挂载"。
+    #[serde(default)]
+    pub pool: String,
+}
+
+/// 一个 ZFS 池。成员盘的容量由池统一使用，所以用量要报在池上。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZfsPool {
+    pub name: String,
+    /// 池的总容量（字节）。
+    #[serde(default)]
+    pub size_bytes: u64,
+    /// 已分配（字节）。
+    #[serde(default)]
+    pub alloc_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CpuStat {
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub cores: u32,
+    /// 两次 `/proc/stat` 采样算出的使用率（0–100）。
+    #[serde(default)]
+    pub usage_percent: f64,
+    #[serde(default)]
+    pub user_percent: f64,
+    #[serde(default)]
+    pub system_percent: f64,
+    #[serde(default)]
+    pub iowait_percent: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LoadStat {
+    #[serde(default)]
+    pub one: f64,
+    #[serde(default)]
+    pub five: f64,
+    #[serde(default)]
+    pub fifteen: f64,
+    /// 运行中 / 总进程数（`/proc/loadavg` 第 4 列 `1/234`）。
+    #[serde(default)]
+    pub running: u32,
+    #[serde(default)]
+    pub total: u32,
+}
+
+/// 内存与 Swap，单位统一为 kB（与 `/proc/meminfo` 一致，省一次换算）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryStat {
+    #[serde(default)]
+    pub total_kb: u64,
+    #[serde(default)]
+    pub available_kb: u64,
+    #[serde(default)]
+    pub used_kb: u64,
+    #[serde(default)]
+    pub buffers_kb: u64,
+    #[serde(default)]
+    pub cached_kb: u64,
+    /// tmpfs / shmem 占用。它被内核算在 `cached_kb` 里，但删不掉也回收不了，
+    /// 所以"真正能腾出来的缓存"要减掉它。
+    #[serde(default)]
+    pub shmem_kb: u64,
+    #[serde(default)]
+    pub swap_total_kb: u64,
+    #[serde(default)]
+    pub swap_used_kb: u64,
+}
+
+/// 内存去向的进一步拆分。
+///
+/// 只做"能低成本拿到"的三类：`qemu/kvm` 进程的 RSS、docker 容器的 cgroup 用量、
+/// ZFS 的 ARC。三者都没有时全是 0，界面退回「已用 / 缓存 / Buffers」三段。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemBreakdown {
+    /// libvirt / qemu 虚拟机进程的 RSS 合计（kB）。
+    #[serde(default)]
+    pub vm_kb: u64,
+    /// docker 容器的 `memory.current` 合计（kB）。
+    #[serde(default)]
+    pub container_kb: u64,
+    /// ZFS ARC 大小（kB）。它通常被算进 cached，所以是"可回收"那一侧。
+    #[serde(default)]
+    pub zfs_arc_kb: u64,
+}
+
+/// 一块 GPU。NVIDIA 走 `nvidia-smi`，其余厂商退回 `/sys/class/drm`。
+///
+/// 驱动不报的字段一律是 0（例如核显没有独立显存、老驱动不给温度），
+/// 界面据此决定显示哪几行，而不是显示一串 0。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GpuStat {
+    /// 型号，例如 `NVIDIA GeForce RTX 4090`。
+    pub name: String,
+    /// 0–100；驱动不支持时是 0。
+    #[serde(default)]
+    pub usage_percent: f64,
+    #[serde(default)]
+    pub memory_used_kb: u64,
+    #[serde(default)]
+    pub memory_total_kb: u64,
+    /// 摄氏度；读不到是 0。
+    #[serde(default)]
+    pub temperature_c: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DiskUsage {
+    pub filesystem: String,
+    pub mount: String,
+    #[serde(default)]
+    pub total_kb: u64,
+    #[serde(default)]
+    pub used_kb: u64,
+    #[serde(default)]
+    pub available_kb: u64,
+    #[serde(default)]
+    pub use_percent: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct NetInterface {
+    pub name: String,
+    #[serde(default)]
+    pub rx_bytes: u64,
+    #[serde(default)]
+    pub tx_bytes: u64,
+    /// 字节/秒（两次采样差分）。
+    #[serde(default)]
+    pub rx_rate: f64,
+    #[serde(default)]
+    pub tx_rate: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DiskIo {
+    pub device: String,
+    #[serde(default)]
+    pub read_bytes: u64,
+    #[serde(default)]
+    pub write_bytes: u64,
+    /// 字节/秒（两次采样差分）。
+    #[serde(default)]
+    pub read_rate: f64,
+    #[serde(default)]
+    pub write_rate: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProcessRow {
+    pub pid: u32,
+    #[serde(default)]
+    pub cpu_percent: f64,
+    #[serde(default)]
+    pub mem_percent: f64,
+    #[serde(default)]
+    pub rss_kb: u64,
+    #[serde(default)]
+    pub command: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ContainerSummary {
+    /// `docker` / `podman`；`None` = 这台机器上没有容器引擎。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    #[serde(default)]
+    pub total: usize,
+    #[serde(default)]
+    pub running: usize,
+    #[serde(default)]
+    pub items: Vec<ContainerRow>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ContainerRow {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub image: String,
+    /// `running` / `exited` / `paused` …（docker 的 `State`）。
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub status: String,
 }
 
 // ─────────────────────── 配置导入导出 ───────────────────────

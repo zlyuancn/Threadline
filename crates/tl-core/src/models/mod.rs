@@ -10,6 +10,7 @@
 pub mod credential;
 pub mod runtime;
 pub mod server;
+pub mod server_admin;
 pub mod tunnel;
 
 /// 删除判定结果：**值类型，无规则**（规则在各模型内部决定何时返回 Blocked）。

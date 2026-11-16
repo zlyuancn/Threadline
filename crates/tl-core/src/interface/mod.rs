@@ -17,13 +17,14 @@ use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use tl_protocol::{
-    AcceptHostKeyRequest, AutostartStatus, CreateCredentialRequest, CreateServerRequest,
-    CreateTunnelRequest, CredentialList, CredentialSummary, GatewayCaStatus, GatewayTrustResult,
-    HealthResponse, HostKeyView, HostsStatus, HostsSyncResult, LogsResponse,
-    PatchCredentialRequest, PatchServerRequest, PatchTunnelRequest, ProbeDraftRequest,
-    ProbeServerReport, ProxySyncResult, ServerDto, ServerEnabledResult, ServerList, SessionClosed,
-    SessionState, SetAutostartRequest, SetServerEnabledRequest, ShutdownAccepted, TunnelList,
-    TunnelView, WhoamiResponse, API_PREFIX,
+    AcceptHostKeyRequest, AppGroupList, AutostartStatus, CreateCredentialRequest,
+    CreateServerRequest, CreateTunnelRequest, CredentialList, CredentialSummary,
+    DeleteAppGroupRequest, GatewayCaStatus, GatewayTrustResult, HealthResponse, HostKeyView,
+    HostsStatus, HostsSyncResult, LogsResponse, PatchCredentialRequest, PatchServerRequest,
+    PatchTunnelRequest, ProbeDraftRequest, ProbeServerReport, ProxySyncResult,
+    RenameAppGroupRequest, ReorderAppRequest, ServerDto, ServerEnabledResult, ServerList,
+    ServerOverview, SessionClosed, SessionState, SetAppGroupsRequest, SetAutostartRequest,
+    SetServerEnabledRequest, ShutdownAccepted, TunnelList, TunnelView, WhoamiResponse, API_PREFIX,
 };
 
 use crate::business::Services;
@@ -136,6 +137,11 @@ pub fn router(state: Arc<AppState>) -> Router {
             &format!("{API_PREFIX}/servers/{{id}}/probe"),
             post(probe_server),
         )
+        // 管理页：只读采集。后续模块（进程/文件/终端…）沿用同一个 `admin/` 前缀。
+        .route(
+            &format!("{API_PREFIX}/servers/{{id}}/admin/overview"),
+            get(server_admin_overview),
+        )
         // 放在顶层而不是 /servers 下：`/servers/{id}` 是动态段，同层级再加一个
         // 静态段会被它抢走（表现为 405 Method Not Allowed）。
         .route(&format!("{API_PREFIX}/probe-draft"), post(probe_draft))
@@ -148,10 +154,25 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(accept_host_key),
         )
         .route(&format!("{API_PREFIX}/events"), get(stream_events))
+        // 应用页布局：分组清单与磁贴顺序。**只影响界面排列**，不动任何转发的运行态。
+        .route(
+            &format!("{API_PREFIX}/app-groups"),
+            get(list_app_groups).put(set_app_groups),
+        )
+        .route(
+            &format!("{API_PREFIX}/app-groups/rename"),
+            post(rename_app_group),
+        )
+        .route(
+            &format!("{API_PREFIX}/app-groups/delete"),
+            post(delete_app_group),
+        )
         .route(
             &format!("{API_PREFIX}/tunnels"),
             get(list_tunnels).post(create_tunnel),
         )
+        // 静态段放在 `{id}` 之前：与 `/servers/order` 同一套写法。
+        .route(&format!("{API_PREFIX}/tunnels/app-order"), put(reorder_app))
         .route(
             &format!("{API_PREFIX}/tunnels/{{id}}"),
             patch(patch_tunnel).delete(remove_tunnel),
@@ -375,6 +396,27 @@ async fn probe_server(
     }))
 }
 
+/// 管理页概览：借这条隧道的会话执行一次只读采集脚本。
+///
+/// `?probe=live|disk-io|disks` 只采对应那几块（每秒 / 每 5 秒 / 每 10 秒各一条），
+/// 缺省是完整采集。拆开的理由是每秒跑 `df` 会在挂了网络盘时把整个脚本拖住。
+async fn server_admin_overview(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<OverviewQuery>,
+) -> Result<Json<ServerOverview>, ApiFailure> {
+    let probe = crate::models::server_admin::Probe::parse(query.probe.as_deref().unwrap_or("full"));
+    let overview = state.services.server_overview(&id, probe).await?;
+    Ok(Json(overview))
+}
+
+/// 概览接口的查询参数。缺省 = 完整采集。
+#[derive(Debug, Default, Deserialize)]
+struct OverviewQuery {
+    #[serde(default)]
+    probe: Option<String>,
+}
+
 /// 保存前试连：拿请求里的表单值探一次，不落库。
 async fn probe_draft(
     State(state): State<Arc<AppState>>,
@@ -503,6 +545,48 @@ async fn accept_host_key(
     }
 
     Ok(Json(server))
+}
+
+// ─────────────────────────── 应用页布局 ───────────────────────────
+
+/// 分组清单（含自动收录的组与空组）。
+async fn list_app_groups(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<AppGroupList>, ApiFailure> {
+    Ok(Json(state.services.app_groups()?))
+}
+
+/// 全量覆盖清单：新建、删除空组、调整组顺序。
+async fn set_app_groups(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SetAppGroupsRequest>,
+) -> Result<Json<AppGroupList>, ApiFailure> {
+    Ok(Json(state.services.set_app_groups(req)?))
+}
+
+/// 分组改名（成员一起改，核心一次写完）。
+async fn rename_app_group(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RenameAppGroupRequest>,
+) -> Result<Json<AppGroupList>, ApiFailure> {
+    Ok(Json(state.services.rename_app_group(req)?))
+}
+
+/// 删除分组（成员回落到「未分组」）。
+async fn delete_app_group(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<DeleteAppGroupRequest>,
+) -> Result<Json<AppGroupList>, ApiFailure> {
+    Ok(Json(state.services.delete_app_group(req)?))
+}
+
+/// 磁贴顺序：只写 `app_order`，不触发任何转发启停。
+async fn reorder_app(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ReorderAppRequest>,
+) -> Result<StatusCode, ApiFailure> {
+    state.services.reorder_app(req)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ─────────────────────────── 隧道 ───────────────────────────

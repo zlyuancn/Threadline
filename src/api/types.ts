@@ -260,6 +260,24 @@ export interface TunnelDto {
   group?: string;
   /** 是否出现在「应用」页。 */
   in_app?: boolean;
+  /**
+   * 应用页里的显示顺序（越小越靠前）。
+   *
+   * 只影响应用页排列，转发本身的运行与它无关；全为 0 时按配置原顺序排。
+   */
+  app_order?: number;
+}
+
+/* ───────────── 应用页布局（/app-groups） ───────────── */
+
+/** 应用页的一个分组。成员归属仍由 `TunnelDto.group` 决定，这里只管顺序与空组。 */
+export interface AppGroup {
+  name: string;
+  order: number;
+}
+
+export interface AppGroupList {
+  items: AppGroup[];
 }
 
 export interface TunnelStatus {
@@ -459,6 +477,174 @@ export interface ShutdownAccepted {
 export interface LogsResponse {
   lines: string[];
   truncated: boolean;
+}
+
+/* ───────────── 服务器管理（/servers/{id}/admin） ───────────── */
+
+/** 管理页模块状态：可用 / 规划中 / 这台机器上不可用。 */
+export type AdminModuleState = 'ready' | 'planned' | 'unavailable';
+
+export interface AdminModule {
+  id: string;
+  title: string;
+  state: AdminModuleState;
+  note?: string;
+}
+
+export interface SystemInfo {
+  hostname: string;
+  os: string;
+  kernel: string;
+  arch: string;
+  uptime_secs: number;
+  /** 主出口 IPv4；取不到时是空串，界面就不显示这一行。 */
+  host_ip?: string;
+}
+
+/**
+ * 一块物理盘（`lsblk` 里 TYPE=disk 的那一层）。
+ *
+ * 之所以不按挂载点展示：Unraid 会把阵列里每个共享都挂一遍，
+ * 同一块盘在 `df` 里能出现十几次，看着像装了一堆盘。
+ */
+export interface BlockDisk {
+  name: string;
+  size_bytes: number;
+  /** 该盘所有已挂载分区的容量合计（kB）。0 = 未挂载或由阵列/ZFS 托管。 */
+  total_kb: number;
+  used_kb: number;
+  /** 第一个挂载点，悬停时说明"挂在哪"。 */
+  mount?: string;
+  /** `lsblk` 报的文件系统类型（`ext4`、`zfs_member`…）。 */
+  fstype?: string;
+  /** 所属 ZFS 池名。空 = 不是池成员。 */
+  pool?: string;
+}
+
+/** 一个 ZFS 池：成员盘把容量交给池，用量只能报在池上。 */
+export interface ZfsPool {
+  name: string;
+  size_bytes: number;
+  alloc_bytes: number;
+}
+
+/** 内存去向的细分：VM / 容器 / ZFS ARC。拿不到的子项是 0。 */
+export interface MemBreakdown {
+  vm_kb: number;
+  container_kb: number;
+  zfs_arc_kb: number;
+}
+
+export interface CpuStat {
+  model: string;
+  cores: number;
+  usage_percent: number;
+  user_percent: number;
+  system_percent: number;
+  iowait_percent: number;
+}
+
+export interface LoadStat {
+  one: number;
+  five: number;
+  fifteen: number;
+  running: number;
+  total: number;
+}
+
+export interface MemoryStat {
+  total_kb: number;
+  available_kb: number;
+  used_kb: number;
+  buffers_kb: number;
+  cached_kb: number;
+  /** tmpfs / shmem：被算在 cached 里，但删不掉也回收不了。 */
+  shmem_kb?: number;
+  swap_total_kb: number;
+  swap_used_kb: number;
+}
+
+/** 一块 GPU。驱动报不了的字段是 0（核显没独立显存、老驱动不给温度）。 */
+export interface GpuStat {
+  name: string;
+  /** 0–100。 */
+  usage_percent: number;
+  memory_used_kb: number;
+  memory_total_kb: number;
+  /** 摄氏度；0 = 读不到。 */
+  temperature_c: number;
+}
+
+export interface DiskUsage {
+  filesystem: string;
+  mount: string;
+  total_kb: number;
+  used_kb: number;
+  available_kb: number;
+  use_percent: number;
+}
+
+export interface NetInterface {
+  name: string;
+  rx_bytes: number;
+  tx_bytes: number;
+  /** 字节/秒。 */
+  rx_rate: number;
+  tx_rate: number;
+}
+
+export interface DiskIo {
+  device: string;
+  read_bytes: number;
+  write_bytes: number;
+  read_rate: number;
+  write_rate: number;
+}
+
+export interface ProcessRow {
+  pid: number;
+  cpu_percent: number;
+  mem_percent: number;
+  rss_kb: number;
+  command: string;
+}
+
+export interface ContainerRow {
+  id: string;
+  name: string;
+  image: string;
+  state: string;
+  status: string;
+}
+
+export interface ContainerSummary {
+  engine?: string;
+  total: number;
+  running: number;
+  items: ContainerRow[];
+}
+
+export interface ServerOverview {
+  collected_at: string;
+  elapsed_ms: number;
+  system: SystemInfo;
+  cpu: CpuStat;
+  load: LoadStat;
+  memory: MemoryStat;
+  /** 内存去向细分（VM / 容器 / ZFS ARC）；全 0 表示这台机器没这些东西。 */
+  mem_breakdown: MemBreakdown;
+  /** 没有 GPU 时为空数组；有 GPU 才在概览里多出一张卡。 */
+  gpus: GpuStat[];
+  disks: DiskUsage[];
+  block_disks: BlockDisk[];
+  /** ZFS 池清单；没装 ZFS 时为空。 */
+  zfs_pools: ZfsPool[];
+  network: NetInterface[];
+  disk_io: DiskIo[];
+  processes: ProcessRow[];
+  containers: ContainerSummary;
+  modules: AdminModule[];
+  degraded: string[];
 }
 
 export interface ApiError {

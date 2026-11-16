@@ -4,6 +4,7 @@
 //! 「能不能启动」「什么时候进 Error」「要不要提权」一律由模型回答。
 //! 允许调用：`models`（各模型的公开操作）、`foundation`。
 
+pub mod admin;
 pub mod gateway;
 pub mod hosts_sync;
 pub mod profile;
@@ -14,9 +15,10 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use tl_protocol::{
-    AutostartStatus, CreateCredentialRequest, CreateServerRequest, CreateTunnelRequest,
-    CredentialKind, PatchServerRequest, PatchTunnelRequest, ProbeDraftRequest, TunnelStatus,
-    WhoamiResponse,
+    AppGroupList, AutostartStatus, CreateCredentialRequest, CreateServerRequest,
+    CreateTunnelRequest, CredentialKind, DeleteAppGroupRequest, PatchServerRequest,
+    PatchTunnelRequest, ProbeDraftRequest, RenameAppGroupRequest, ReorderAppRequest,
+    SetAppGroupsRequest, TunnelStatus, WhoamiResponse,
 };
 use tokio::sync::broadcast;
 
@@ -111,6 +113,46 @@ impl Services {
         }
 
         Ok(report)
+    }
+
+    /// 管理页概览：借隧道的会话采一次只读指标，不改任何配置。
+    ///
+    /// 会话不存在时按需建立一次（与端口转发共用同一条会话），
+    /// 因此"点管理"和"点启用隧道"看到的连接状态是同一份事实。
+    ///
+    /// 按 `probe` 只采要的那几块：界面里 CPU/内存/流量每秒、磁盘 IO 每 5 秒、
+    /// 磁盘容量每 10 秒，各自独立请求。
+    pub async fn server_overview(
+        &self,
+        server_id: &str,
+        probe: crate::models::server_admin::Probe,
+    ) -> Result<tl_protocol::ServerOverview> {
+        admin::overview(&self.servers, &self.runner, server_id, probe).await
+    }
+
+    /// 应用页分组清单（含自动收录的组与空组）。
+    pub fn app_groups(&self) -> Result<AppGroupList> {
+        self.tunnels.app_groups()
+    }
+
+    /// 全量覆盖分组清单：新建、删除空组、调整组顺序。
+    pub fn set_app_groups(&self, req: SetAppGroupsRequest) -> Result<AppGroupList> {
+        self.tunnels.set_app_groups(req.items)
+    }
+
+    /// 分组改名（成员一起改）。
+    pub fn rename_app_group(&self, req: RenameAppGroupRequest) -> Result<AppGroupList> {
+        self.tunnels.rename_app_group(&req.from, &req.to)
+    }
+
+    /// 删除分组（成员回落到「未分组」）。
+    pub fn delete_app_group(&self, req: DeleteAppGroupRequest) -> Result<AppGroupList> {
+        self.tunnels.delete_app_group(&req.name)
+    }
+
+    /// 应用页磁贴顺序。**只影响应用页排列**，不碰任何转发的运行态。
+    pub fn reorder_app(&self, req: ReorderAppRequest) -> Result<()> {
+        self.tunnels.reorder_app(req.ids)
     }
 
     /// 用还没保存的表单内容试连一次。

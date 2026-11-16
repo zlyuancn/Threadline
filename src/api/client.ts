@@ -157,6 +157,14 @@ function safeJson(text: string): unknown {
 
 export const http = {
   get: <T>(path: string) => request<T>('GET', path),
+  /**
+   * 慢查询专用：默认 40s。
+   *
+   * 服务器管理概览会先"按需建立会话"再执行采集脚本（远端还要二次采样），
+   * 首次进入时 15s 会被掐断——那不是"核心卡死"。
+   */
+  getSlow: <T>(path: string, timeoutMs = 40_000) =>
+    request<T>('GET', path, undefined, false, [], timeoutMs),
   post: <T>(path: string, body?: unknown, allowStatus?: number[]) =>
     request<T>('POST', path, body, false, allowStatus),
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),

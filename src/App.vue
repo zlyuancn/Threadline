@@ -11,6 +11,7 @@ import type { HostsStatus } from './api/types';
 import { useTunnelsStore } from './models/tunnels';
 import { useServersStore } from './models/servers';
 import { useUpdateStore } from './models/update';
+import { useDesktopPrefsStore } from './models/desktopPrefs';
 import {
   coreState,
   fixDataDirAcl,
@@ -30,12 +31,13 @@ import AppsView from './views/AppsView.vue';
 import AllForwardsView from './views/AllForwardsView.vue';
 import HomeView from './views/HomeView.vue';
 import LogsView from './views/LogsView.vue';
+import ServerAdminView from './views/ServerAdminView.vue';
 import SettingsView from './views/SettingsView.vue';
 
 // 由 vite 的 define 注入（package.json 的 version）：版本号只有一处真相
 const appVersion = __APP_VERSION__;
 
-type Tab = 'apps' | 'all' | 'forwards' | 'logs' | 'settings';
+type Tab = 'apps' | 'all' | 'forwards' | 'admin' | 'logs' | 'settings';
 
 const tab = ref<Tab>('apps');
 const runtime = useRuntimeStore();
@@ -73,6 +75,7 @@ const connectionTag = computed(() => {
 const selection = useSelectionStore();
 const hotkey = useHotkeyStore();
 const traffic = useTrafficStore();
+const prefs = useDesktopPrefsStore();
 
 /**
  * 单条隧道的速率；两端都为 0 时返回 null（模板据此不渲染）。
@@ -139,10 +142,31 @@ function openForwardEditor(serverId: string, forwardId: string) {
   focusForward.value = { id: forwardId, nonce: (focusForward.value?.nonce ?? 0) + 1 };
 }
 
+/**
+ * 服务器管理页：从隧道卡片进入。
+ *
+ * 用独立的 `admin` tab 而不是弹窗——管理页后面会长出终端、文件树这类需要整屏的模块。
+ * 返回键回到隧道页，选中态不变，用户不会丢失上下文。
+ */
+const adminServerId = ref('');
+
+function openServerAdmin(serverId: string) {
+  adminServerId.value = serverId;
+  tab.value = 'admin';
+}
+
 /** 「新建连接」在侧栏，弹窗在主区：走一次信号。 */
 function newTunnel() {
   tab.value = 'forwards';
   selection.requestCreate();
+}
+
+/** 侧栏隧道的选中态：隧道页看选中项，管理页看正在管理的那台。 */
+function tunnelActive(id: string): boolean {
+  if (tab.value === 'admin') {
+    return adminServerId.value === id;
+  }
+  return tab.value === 'forwards' && selection.selectedId === id;
 }
 
 /** 侧栏隧道卡片上的小圆点：和其他地方同一套三态语义。 */
@@ -527,9 +551,12 @@ onMounted(async () => {
     } else {
       runtime.markOffline('核心未运行');
     }
-    // 每次被唤起（托盘、热键、再次双击启动）都回到「应用」页
+    // 唤起后去哪一页由设置里的开关决定（默认回「应用」）。
+    // 关掉的人通常正盯着一块内容（日志、终端），被硬拽回应用页很烦。
     unlistenShown = await onWindowShown(() => {
-      tab.value = 'apps';
+      if (prefs.summonToApps) {
+        tab.value = 'apps';
+      }
     });
     unlisten = await onCoreStateChange(async (alive) => {
       if (alive) {
@@ -578,8 +605,9 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <el-container class="app-shell">
-    <aside class="rail">
+  <!-- 管理页是沉浸式的：它自带一列模块导航，再叠一条侧栏会把内容挤成两条细缝 -->
+  <el-container class="app-shell" :class="{ 'is-admin': tab === 'admin' }">
+    <aside class="rail" :inert="tab === 'admin'">
       <div class="brand">
         <img src="/logo.svg" alt="" />
         <div class="brand-text">
@@ -604,7 +632,7 @@ onUnmounted(() => {
           v-for="server in servers.servers"
           :key="server.id"
           class="conn-item"
-          :class="{ 'is-active': tab === 'forwards' && selection.selectedId === server.id }"
+          :class="{ 'is-active': tunnelActive(server.id) }"
           @click="openTunnel(server.id)"
         >
           <span class="conn-avatar">{{ initial(server.name) }}</span>
@@ -739,6 +767,12 @@ onUnmounted(() => {
           v-else-if="tab === 'forwards'"
           :focus-forward="focusForward"
           @focus-handled="focusForward = null"
+          @manage-server="openServerAdmin"
+        />
+        <ServerAdminView
+          v-else-if="tab === 'admin'"
+          :server-id="adminServerId"
+          @back="tab = 'forwards'"
         />
         <div v-else class="padded">
           <LogsView v-if="tab === 'logs'" />
