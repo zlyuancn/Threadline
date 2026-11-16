@@ -210,7 +210,7 @@ cargo test --workspace                # 核心测试
 
 第三方组件许可见 [THIRD_PARTY-NOTICES.md](THIRD_PARTY-NOTICES.md)。
 
-> 0.3.0 及更早的版本是按 PolyForm Noncommercial 1.0.0 发布的，那几个版本不追溯；从 0.4.0 起改为 MIT。
+> 0.3.0 及更早的版本是按 PolyForm Noncommercial 1.0.0 发布的，那几个版本不追溯；从 0.3.1 起改为 MIT。
 
 ---
 

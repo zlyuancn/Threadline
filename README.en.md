@@ -207,7 +207,7 @@ Source is released under [**MIT**](LICENSE): use, modify, redistribute, and ship
 
 Third-party notices: [THIRD_PARTY-NOTICES.md](THIRD_PARTY-NOTICES.md).
 
-> 0.3.0 and earlier were published under PolyForm Noncommercial 1.0.0 and are not relicensed retroactively; MIT applies from 0.4.0 onward.
+> 0.3.0 and earlier were published under PolyForm Noncommercial 1.0.0 and are not relicensed retroactively; MIT applies from 0.3.1 onward.
 
 ---
 
