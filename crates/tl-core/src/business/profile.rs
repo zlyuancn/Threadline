@@ -184,6 +184,8 @@ pub fn import(
     };
     let mut server_ids: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
+    // 新建转发的（包内序号, 新 id）。落地后统一重排，避免逐条插队。
+    let mut placed: Vec<(i32, String)> = Vec::new();
 
     for server in &req.servers {
         match server.action.as_str() {
@@ -272,7 +274,11 @@ pub fn import(
                     }),
                 },
                 _ => match create_forward(tunnels, &server_id, forward) {
-                    Ok(()) => result.created_forwards += 1,
+                    Ok(id) => {
+                        result.created_forwards += 1;
+                        // 包里的排序值：老包没带（None）就排到已导入的后面
+                        placed.push((forward.app_order.unwrap_or(i32::MAX), id));
+                    }
                     Err(e) => result.failed.push(ProfileImportFailure {
                         name: forward.name.clone(),
                         reason: e.to_string(),
@@ -282,7 +288,65 @@ pub fn import(
         }
     }
 
+    // 布局最后落：顺序要等所有条目都拿到新 id 才算得出来。
+    // 失败不回滚已导入的条目——连接和转发本身是对的，布局只是好看。
+    if !placed.is_empty() || !req.app_groups.is_empty() {
+        if let Err(e) = apply_layout(tunnels, placed, &req.app_groups) {
+            result.failed.push(ProfileImportFailure {
+                name: "应用页布局".to_string(),
+                reason: e.to_string(),
+            });
+        }
+    }
+
     Ok(result)
+}
+
+/// 把包里的应用页布局落到本机。
+///
+/// 两件事：
+/// 1. 新导入的转发按包里的 `app_order` 排在前面，本机其余条目保持原顺序追加在后；
+/// 2. 组清单只**追加**本机没有的组名，不覆盖已有顺序——导入别人的配置不该打乱自己的排版。
+fn apply_layout(
+    tunnels: &TunnelStore,
+    mut placed: Vec<(i32, String)>,
+    groups: &[String],
+) -> Result<()> {
+    if !placed.is_empty() {
+        placed.sort_by_key(|(order, _)| *order);
+        let mut order: Vec<String> = placed.into_iter().map(|(_, id)| id).collect();
+        for view in tunnels.list()?.items {
+            if !order.contains(&view.definition.id) {
+                order.push(view.definition.id);
+            }
+        }
+        tunnels.reorder_app(order)?;
+    }
+
+    if !groups.is_empty() {
+        let existing = tunnels.app_groups()?.items;
+        let mut names: Vec<String> = existing.iter().map(|group| group.name.clone()).collect();
+        for name in groups {
+            let name = name.trim();
+            if !name.is_empty() && !names.iter().any(|known| known == name) {
+                names.push(name.to_string());
+            }
+        }
+        // 没新增就不写盘：否则每次导入都会重写一次组清单。
+        if names.len() > existing.len() {
+            let items = names
+                .into_iter()
+                .enumerate()
+                .map(|(index, name)| tl_protocol::AppGroup {
+                    name,
+                    order: index as i32,
+                })
+                .collect();
+            tunnels.set_app_groups(items)?;
+        }
+    }
+
+    Ok(())
 }
 
 fn create_server(servers: &ServerStore, server: &ProfileImportServer) -> Result<String> {
@@ -347,12 +411,13 @@ fn overwrite_server(
     Ok(local_id.to_string())
 }
 
+/// 新建一条转发，返回它的新 id——落地后要统一重排应用页顺序，需要这个 id。
 fn create_forward(
     tunnels: &TunnelStore,
     server_id: &str,
     forward: &tl_protocol::ProfileImportForward,
-) -> Result<()> {
-    tunnels.create(CreateTunnelRequest {
+) -> Result<String> {
+    let created = tunnels.create(CreateTunnelRequest {
         name: forward.name.clone(),
         server_id: server_id.to_string(),
         local_host: forward.local_host.clone(),
@@ -369,7 +434,7 @@ fn create_forward(
         group: forward.group.clone(),
         in_app: forward.in_app,
     })?;
-    Ok(())
+    Ok(created.id)
 }
 
 fn overwrite_forward(
@@ -379,7 +444,7 @@ fn overwrite_forward(
 ) -> Result<()> {
     let Some(target) = forward.target_id.as_deref().filter(|id| !id.is_empty()) else {
         // 没有目标 id 时降级为新建：界面上"覆盖"选项只在同 id 时出现
-        return create_forward(tunnels, server_id, forward);
+        return create_forward(tunnels, server_id, forward).map(|_| ());
     };
     tunnels.patch(
         target,
@@ -550,6 +615,7 @@ mod tests {
             scheme: "tcp".into(),
             domain: String::new(),
             remote_scheme: None,
+            app_order: None,
             open_path: String::new(),
             note: String::new(),
             group: String::new(),
@@ -634,6 +700,7 @@ mod tests {
             &f.servers,
             &f.tunnels,
             ProfileImportRequest {
+                app_groups: Vec::new(),
                 servers: vec![ProfileImportServer {
                     source_id: "pkg-x".into(),
                     name: "x".into(),
@@ -666,6 +733,66 @@ mod tests {
             saved[0].host_key_fingerprint.as_deref(),
             Some("SHA256:shared")
         );
+    }
+
+    #[test]
+    fn import_applies_shared_layout() {
+        let f = fixture("import-layout");
+
+        // 故意让包里的先后顺序与 app_order 相反：排序该按序号，不按出现次序
+        let mut late = import_forward("late", 18081, "create");
+        late.app_order = Some(9);
+        let mut early = import_forward("early", 18080, "create");
+        early.app_order = Some(1);
+
+        let result = import(
+            &f.servers,
+            &f.tunnels,
+            ProfileImportRequest {
+                app_groups: vec!["开发".into(), "测试".into()],
+                servers: vec![ProfileImportServer {
+                    source_id: "pkg-x".into(),
+                    name: "x".into(),
+                    host: "192.0.2.10".into(),
+                    port: 22,
+                    username: "root".into(),
+                    credential_kind: CredentialKind::Password,
+                    keepalive_secs: 30,
+                    host_key_fingerprint: None,
+                    action: "create".into(),
+                    forwards: vec![late, early],
+                }],
+                keep_disabled: true,
+            },
+        )
+        .expect("import");
+
+        assert!(result.failed.is_empty(), "布局失败不该弄坏导入本身");
+
+        // `list()` 保持文件顺序，排序靠 `app_order`：所以比较序号，而不是列表位置
+        let items = f.tunnels.list().expect("list").items;
+        let order_of = |name: &str| {
+            items
+                .iter()
+                .find(|view| view.definition.name == name)
+                .map(|view| view.definition.app_order)
+                .expect("导入的转发应该在列表里")
+        };
+        assert!(
+            order_of("early") < order_of("late"),
+            "包内 app_order 小的应该排在前面"
+        );
+
+        let groups: Vec<String> = f
+            .tunnels
+            .app_groups()
+            .expect("groups")
+            .items
+            .iter()
+            .map(|group| group.name.clone())
+            .collect();
+        assert!(groups.contains(&"开发".to_string()));
+        assert!(groups.contains(&"测试".to_string()));
     }
 
     #[test]
@@ -702,6 +829,7 @@ mod tests {
             &f.servers,
             &f.tunnels,
             ProfileImportRequest {
+                app_groups: Vec::new(),
                 servers: vec![ProfileImportServer {
                     source_id: original.id.clone(),
                     name: "new-name".into(),
@@ -736,6 +864,7 @@ mod tests {
     fn import_is_idempotent_by_skip_action() {
         let f = fixture("import-skip");
         let req = || ProfileImportRequest {
+            app_groups: Vec::new(),
             servers: vec![ProfileImportServer {
                 source_id: "pkg-y".into(),
                 name: "y".into(),
@@ -782,6 +911,7 @@ mod tests {
             &f.servers,
             &f.tunnels,
             ProfileImportRequest {
+                app_groups: Vec::new(),
                 servers: vec![ProfileImportServer {
                     source_id: "other-machine-id".into(),
                     name: "y".into(),
@@ -837,6 +967,7 @@ mod tests {
             &f.servers,
             &f.tunnels,
             ProfileImportRequest {
+                app_groups: Vec::new(),
                 servers: vec![ProfileImportServer {
                     source_id: "other-machine-id".into(),
                     // 前端预填的建议名，已经不等于本机那条连接的名字

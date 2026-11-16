@@ -36,6 +36,8 @@ export interface ProfileForward {
   group: string;
   in_app: boolean;
   auto_start: boolean;
+  /** 应用页里的排列序号；缺省 = 老包没带布局，导入后排在末尾。 */
+  app_order?: number;
   /** 包内路径（`icons/xxx.png`）或外链；空 = 无自定义图标。 */
   icon?: string;
 }
@@ -76,6 +78,16 @@ export interface ProfileDocument {
   app_version: string;
   servers: ProfileServer[];
   preferences?: ProfilePreferences;
+  /**
+   * 应用页的组清单（顺序即顺序，含空组）。
+   *
+   * 老包没有这一节：导入时按「不动本机的组清单」处理。
+   */
+  app_layout?: ProfileLayout;
+}
+
+export interface ProfileLayout {
+  groups: string[];
 }
 
 export interface BuiltPackage {
@@ -100,6 +112,8 @@ export interface BuildOptions {
   includeIcons: boolean;
   includeFingerprint: boolean;
   preferences?: ProfilePreferences;
+  /** 应用页的组清单；传了就随包走，不传就不写 `app_layout`。 */
+  appGroups?: string[];
   appVersion?: string;
   now?: Date;
 }
@@ -153,6 +167,8 @@ export function buildProfile(opts: BuildOptions): BuiltPackage {
         opts.appVersion ?? (typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '0.0.0'),
       servers,
       ...(opts.preferences ? { preferences: opts.preferences } : {}),
+      // 组清单为空的机器不写这一节：老版本客户端读到空数组会以为"要清空"
+      ...(opts.appGroups?.length ? { app_layout: { groups: opts.appGroups } } : {}),
     },
     icons,
   };
@@ -178,6 +194,8 @@ function toProfileForward(
     group: forward.group ?? '',
     in_app: forward.in_app ?? true,
     auto_start: forward.auto_start,
+    // `!= null` 而不是真值判断：第 0 位也是有效序号，漏掉它会让导入后排到最后
+    ...(forward.app_order != null ? { app_order: forward.app_order } : {}),
     icon: includeIcons ? packIcon(forward.icon, icons) : '',
   };
 }

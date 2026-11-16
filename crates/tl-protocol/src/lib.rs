@@ -1076,6 +1076,12 @@ pub struct ProfileImportRequest {
     /// 否则没密码的连接会被 keeper 反复重连。
     #[serde(default = "default_true")]
     pub keep_disabled: bool,
+    /// 分享者的应用页组清单（组名数组，顺序即顺序）。
+    ///
+    /// 只**追加**本机没有的组，不覆盖本机已有的组顺序——导入别人的配置不该把
+    /// 自己的排版打乱。空数组或老包缺这个字段 = 不动本机的组清单。
+    #[serde(default)]
+    pub app_groups: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1127,6 +1133,11 @@ pub struct ProfileImportForward {
     /// 前端已从包里读出的图标（data URI）；空 = 不带。
     #[serde(default)]
     pub icon: String,
+    /// 分享者应用页里的排列序号。`None` = 包没带布局（老包），按"追加到末尾"处理。
+    ///
+    /// 只影响落地后的显示顺序：全部落完再统一重排一次，避免逐条插队把别人的位置顶乱。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_order: Option<i32>,
     /// `create` / `overwrite` / `skip`
     pub action: String,
     /// 覆盖时按此 id 找现有转发。

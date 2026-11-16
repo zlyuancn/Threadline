@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+import { appGroupsApi } from '../api';
 import { isTauri, saveProfilePackage } from '../api/native';
 import type { TunnelDto } from '../api/types';
 import { readPreferences } from '../models/preferences';
@@ -123,6 +124,11 @@ async function doExport(): Promise<void> {
   }
   exporting.value = true;
   try {
+    // 组清单现读：这个对话框可能在整个会话里都没进过应用页，store 里是空的
+    const groups = await appGroupsApi
+      .list()
+      .then((list) => list.items.map((item) => item.name))
+      .catch(() => [] as string[]);
     const built = buildProfile({
       servers: servers.servers,
       forwards: tunnels.items.map((view) => view.definition),
@@ -132,6 +138,7 @@ async function doExport(): Promise<void> {
       includeFingerprint: includeFingerprint.value,
       // 用 readPreferences 而不是手写字段：偏好一多，手写必然漏
       ...(includePreferences.value ? { preferences: readPreferences() } : {}),
+      appGroups: groups,
     });
     const bytes = writePackage(built);
     const name = packageFileName();

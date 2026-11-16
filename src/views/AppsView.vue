@@ -8,7 +8,7 @@
 // 编辑模式只负责"怎么摆"：拖磁贴改顺序/归属、建组、改组名、删组。
 // 名称/图标/端口仍在转发编辑弹窗里改——同一个字段不留两个入口。
 import { computed, onMounted, ref } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { useServersStore } from '../models/servers';
 import { useTunnelsStore } from '../models/tunnels';
 import { useSelectionStore } from '../models/selection';
@@ -230,6 +230,37 @@ function toggleEditing() {
   }
 }
 
+/**
+ * 恢复默认排版：磁贴顺序回到配置顺序，组顺序回到「首次出现」，空组消失。
+ *
+ * 只重置「怎么摆」，**不动每条转发所属的组名**——`group` 是配置数据，不是排版。
+ * 否则点一下恢复，所有磁贴都跑回「未分组」，那才是真把东西弄丢。
+ */
+async function resetLayout() {
+  try {
+    await ElMessageBox.confirm(
+      '磁贴顺序回到配置顺序，自定义的空分组会被清掉；每条转发所属的分组名称不变。',
+      '恢复默认排版',
+      { type: 'warning', confirmButtonText: '恢复', cancelButtonText: '取消' },
+    );
+  } catch {
+    return;
+  }
+  try {
+    // 配置顺序 = 核心列表给出的顺序：直接照它写一遍 `app_order`，
+    // 比"全部置 0 再依赖稳定排序"更直白。
+    const ids = forwards.items
+      .filter((view) => view.definition.in_app !== false)
+      .map((view) => view.definition.id);
+    await layout.reorder(ids);
+    await layout.setAll([]);
+    await Promise.all([forwards.refresh(), layout.refresh()]);
+    ElMessage.success('排版已恢复默认');
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e));
+  }
+}
+
 function startDrag(event: PointerEvent, state: DragState) {
   if (!editing.value || event.button !== 0) {
     return;
@@ -425,6 +456,15 @@ function commitCreate() {
         >
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h3l7-7-3-3-7 7v3z"/><path d="M9.5 3.5l3 3"/></svg>
           {{ editing ? '完成' : '编辑' }}
+        </button>
+        <!-- 只在编辑模式下露出：排版动作应该和"正在改排版"同时可见 -->
+        <button
+          v-if="editing"
+          class="btn"
+          title="磁贴顺序回到配置顺序，清空自定义空分组（不改每条转发所属的组）"
+          @click="resetLayout"
+        >
+          恢复默认
         </button>
         <label
           :title="showAll ? '关闭后只显示已启用（随隧道自启）的转发' : '打开后显示全部转发'"

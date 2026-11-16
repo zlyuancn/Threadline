@@ -9,6 +9,7 @@ import type {
   ProfileImportServer,
   ProfilePlan,
 } from '../api/types';
+import { useAppLayoutStore } from '../models/appLayout';
 import { applyPreferences, diffPreferences, readPreferences } from '../models/preferences';
 import { readPackage, type ParsedPackage } from '../models/profile';
 import { useServersStore } from '../models/servers';
@@ -18,6 +19,7 @@ const open = defineModel<boolean>({ required: true });
 
 const servers = useServersStore();
 const tunnels = useTunnelsStore();
+const layout = useAppLayoutStore();
 
 type Step = 'pick' | 'review' | 'done';
 
@@ -199,6 +201,8 @@ function buildRequest(): ProfileImportRequest {
           group: forward.group,
           in_app: forward.in_app,
           auto_start: forward.auto_start,
+          // 分享者的排版位置：Core 落地后据此重排，老包没有就排到末尾
+          app_order: forward.app_order ?? null,
           icon: iconPath ? (parsed.value!.icons.get(iconPath) ?? '') : '',
           action: forwardAction,
           target_id:
@@ -209,7 +213,12 @@ function buildRequest(): ProfileImportRequest {
   }
   // 固定停用：包里没有密码，启用必然失败（Core 会返回 credential_missing）。
   // 给用户一个「导入后自动连接」的开关只会让连接立刻进入失败状态。
-  return { servers: out, keep_disabled: true };
+  return {
+    servers: out,
+    keep_disabled: true,
+    // 组清单交给 Core 去合并：它只追加本机没有的组名，不覆盖已有顺序
+    app_groups: parsed.value!.document.app_layout?.groups ?? [],
+  };
 }
 
 async function doImport(): Promise<void> {
@@ -230,7 +239,8 @@ async function doImport(): Promise<void> {
     }
 
     step.value = 'done';
-    await Promise.all([servers.refresh(), tunnels.refresh()]);
+    // 布局也要重读：Core 可能刚追加了组名、并按包里的 app_order 重排过
+    await Promise.all([servers.refresh(), tunnels.refresh(), layout.refresh()]);
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : String(e));
   } finally {

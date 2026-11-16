@@ -419,6 +419,8 @@ export interface ProfileImportForward {
   /** 已从包里读出的图标（data URI）；空 = 不带。 */
   icon?: string;
   action: 'create' | 'overwrite' | 'skip';
+  /** 分享者应用页里的排列序号。缺省 = 包没带布局，落地后追加到末尾。 */
+  app_order?: number | null;
   /** 覆盖时按此 id 找现有转发。 */
   target_id?: string | null;
 }
@@ -440,6 +442,12 @@ export interface ProfileImportRequest {
   servers: ProfileImportServer[];
   /** 导入后保持停用；缺省由 Core 当作 true。 */
   keep_disabled?: boolean;
+  /**
+   * 分享者的应用页组清单（顺序即顺序）。
+   *
+   * Core 只在**本机没有这个组名**时追加，不覆盖本机已有的组顺序。
+   */
+  app_groups?: string[];
 }
 
 export interface ProfileImportFailure {
