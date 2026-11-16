@@ -2,7 +2,7 @@
 
 **Turn a service on a remote machine into a local port or a local domain.**
 
-[![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-lightgrey)](#requirements)
 [![Release](https://img.shields.io/github/v/release/zlyuancn/Threadline?include_prereleases&sort=semver)](https://github.com/zlyuancn/Threadline/releases)
 
@@ -203,13 +203,11 @@ Known limitations and the vulnerability channel are in [SECURITY.md](SECURITY.md
 
 ## License
 
-Source is released under [**PolyForm Noncommercial 1.0.0**](LICENSE):
+Source is released under [**MIT**](LICENSE): use, modify, redistribute, and ship it commercially — including inside closed-source products — as long as the copyright and permission notice are kept.
 
-- ✅ Free for personal use, research, study, hobby projects, and noncommercial organizations (charity, education, public research, government); modification and redistribution allowed;
-- ✅ Redistribution must keep the `Required Notice` line (attribution) and these terms;
-- ❌ **Commercial use requires a separate license** (including internal production use at a company). Contact the author.
+Third-party notices: [THIRD_PARTY-NOTICES.md](THIRD_PARTY-NOTICES.md).
 
-This is not an OSI-approved license; GitHub labels it `Other`. Third-party notices: [THIRD_PARTY-NOTICES.md](THIRD_PARTY-NOTICES.md).
+> 0.3.0 and earlier were published under PolyForm Noncommercial 1.0.0 and are not relicensed retroactively; MIT applies from 0.4.0 onward.
 
 ---
 

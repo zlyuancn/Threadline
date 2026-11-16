@@ -2,7 +2,7 @@
 
 **把远端的服务，变成你本机的一个端口或一个域名。**
 
-[![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-lightgrey)](#从源码构建)
 [![Release](https://img.shields.io/github/v/release/zlyuancn/Threadline?include_prereleases&sort=semver)](https://github.com/zlyuancn/Threadline/releases)
 
@@ -206,13 +206,11 @@ cargo test --workspace                # 核心测试
 
 ## 许可证
 
-源码以 [**PolyForm Noncommercial 1.0.0**](LICENSE) 发布：
+源码以 [**MIT**](LICENSE) 授权：可以自由使用、修改、分发、商用，也可以闭源集成，只需保留版权与许可声明。
 
-- ✅ 个人使用、研究、学习、爱好项目、非商业组织（慈善/教育/公共研究/政府机构）免费，可修改、可分发；
-- ✅ 分发时须保留 `LICENSE` 里的 `Required Notice`（署名）与许可条款；
-- ❌ **商业用途需另行授权**（含公司内部生产使用），请联系作者。
+第三方组件许可见 [THIRD_PARTY-NOTICES.md](THIRD_PARTY-NOTICES.md)。
 
-这不是 OSI 认可的开源许可证，GitHub 会标为 `Other`。第三方组件许可见 [THIRD_PARTY-NOTICES.md](THIRD_PARTY-NOTICES.md)。
+> 0.3.0 及更早的版本是按 PolyForm Noncommercial 1.0.0 发布的，那几个版本不追溯；从 0.4.0 起改为 MIT。
 
 ---
 
