@@ -189,9 +189,16 @@ async function testTunnel() {
   }
   tunnelTesting.value = true;
   try {
-    const report = form.id
-      ? await tunnels.probeServer(form.id)
-      : await tunnels.probeDraft({
+    /*
+     * 判据是「表单里有没有新凭据」，不是「有没有 id」。
+     *
+     * 编辑已保存的连接时 secret 是空的（密码不回显），用户重新粘了私钥或填了密码，
+     * 就该拿这份新值去探。原来看 id 就一律用库里的凭据——而导入来的连接库里
+     * 根本没有凭据，于是"明明贴了私钥，却报这条隧道还没填密码"。
+     */
+    const draft = !form.id || form.secret.trim() !== '';
+    const report = draft
+      ? await tunnels.probeDraft({
           host: form.host,
           port: form.port,
           username: form.username,
@@ -199,7 +206,8 @@ async function testTunnel() {
           secret: form.secret,
           passphrase: form.passphrase === '' ? null : form.passphrase,
           host_key_fingerprint: null,
-        });
+        })
+      : await tunnels.probeServer(form.id as string);
     if (!report) {
       ElMessage.error(tunnels.lastError || '测试失败');
       return;
