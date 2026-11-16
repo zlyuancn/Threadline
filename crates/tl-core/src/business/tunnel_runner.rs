@@ -116,6 +116,16 @@ impl TunnelRunner {
         self.tasks.lock().expect("tasks lock").contains_key(id)
     }
 
+    /// 拿（必要时建立）某条隧道的会话句柄。
+    ///
+    /// 给"借这条会话问几句话"的能力用（服务器管理概览）：不给转发用，
+    /// 也不改变启用/停用状态——只是保证会话在。
+    pub async fn session_handle(&self, server_id: &str) -> Result<SessionHandle> {
+        self.ensure_session(server_id)
+            .await
+            .map_err(|outcome| anyhow!(engine::describe(&outcome)))
+    }
+
     /// 该隧道是否已有可用的 SSH 会话（界面用来显示"已连接/未连接"）。
     pub fn session_connected(&self, server_id: &str) -> bool {
         self.sessions
@@ -813,6 +823,7 @@ mod tests {
                 icon: String::new(),
                 group: String::new(),
                 in_app: true,
+                app_order: 0,
             },
             status: TunnelStatus {
                 id: id.into(),

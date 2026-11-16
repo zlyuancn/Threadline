@@ -30,7 +30,11 @@ const props = defineProps<{
   focusForward?: { id: string; nonce: number } | null;
 }>();
 
-const emit = defineEmits<{ (e: 'focus-handled'): void }>();
+const emit = defineEmits<{
+  (e: 'focus-handled'): void;
+  /** 打开服务器管理页（卡片上的「管理」）：交给 App 切页，带隧道的 server_id。 */
+  (e: 'manage-server', serverId: string): void;
+}>();
 
 const busyKey = ref<string | null>(null);
 /**
@@ -1078,6 +1082,14 @@ function tunnelDot(row: { server: { id: string } }): string {
         </div>
 
         <div class="server-actions">
+          <!-- 管理页入口：借这条隧道的会话去看服务器本身（系统信息/进程/容器…） -->
+          <button
+            class="btn"
+            title="管理这台服务器：系统信息、进程、容器，以及后续的终端与文件管理"
+            @click="emit('manage-server', selected.server.id)"
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5h11v3h-11zM2.5 9.5h11v3h-11z"/><path d="M5 6h.01M5 11h.01"/></svg> 管理
+          </button>
           <button class="btn" @click="openTunnel(selected.server)">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11.2 2.3l2.5 2.5-8 8L3 13.5l.7-2.7 7.5-8.5z"/></svg> 编辑
           </button>

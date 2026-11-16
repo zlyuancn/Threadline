@@ -15,6 +15,7 @@ use std::time::Duration;
 use russh::client;
 use russh::keys::PublicKeyOrCertificate;
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg};
+use russh::ChannelMsg;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -757,6 +758,70 @@ async fn authenticate(
             reason: "服务器拒绝了该认证方式（密钥被拒或密码错误）".to_string(),
         }),
     }
+}
+
+/// 一次远端命令执行的结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecCapture {
+    pub stdout: String,
+    /// 只留前若干 KB：远端脚本报错刷屏时不该把内存吃光。
+    pub stderr: String,
+    pub code: Option<u32>,
+}
+
+/// 单次命令的输出上限（管理页的采集脚本正常只有几十 KB）。
+const MAX_EXEC_OUTPUT: usize = 512 * 1024;
+
+/// 在**已建立**的会话上执行一条命令并收完输出。
+///
+/// 用于服务器管理这类"借隧道这条会话问几句话"的场景：不新建连接、不占端口。
+/// 超时由底座统一给（`foundation::timeout`），这里不自建计时器。
+pub async fn exec_capture(
+    session: &SessionHandle,
+    command: &str,
+    budget: Duration,
+) -> Result<ExecCapture, String> {
+    let run = async {
+        let mut channel = session
+            .channel_open_session()
+            .await
+            .map_err(|e| format!("打开命令通道失败：{e}"))?;
+        channel
+            .exec(true, command.as_bytes().to_vec())
+            .await
+            .map_err(|e| format!("下发命令失败：{e}"))?;
+
+        let mut stdout: Vec<u8> = Vec::new();
+        let mut stderr: Vec<u8> = Vec::new();
+        let mut code = None;
+        while let Some(msg) = channel.wait().await {
+            match msg {
+                ChannelMsg::Data { data } => {
+                    if stdout.len() < MAX_EXEC_OUTPUT {
+                        stdout.extend_from_slice(data.as_ref());
+                    }
+                }
+                ChannelMsg::ExtendedData { data, .. } => {
+                    if stderr.len() < MAX_EXEC_OUTPUT {
+                        stderr.extend_from_slice(data.as_ref());
+                    }
+                }
+                ChannelMsg::ExitStatus { exit_status } => code = Some(exit_status),
+                ChannelMsg::Eof | ChannelMsg::Close => {}
+                _ => {}
+            }
+        }
+
+        Ok(ExecCapture {
+            stdout: String::from_utf8_lossy(&stdout).to_string(),
+            stderr: String::from_utf8_lossy(&stderr).to_string(),
+            code,
+        })
+    };
+
+    crate::foundation::timeout::with_timeout(budget, run)
+        .await
+        .map_err(|_| format!("远端命令在 {} 秒内没有结束", budget.as_secs()))?
 }
 
 async fn forward_one<S>(

@@ -15,6 +15,8 @@
 pub mod engine;
 pub mod fsm;
 
+mod groups;
+
 use std::collections::{HashMap, HashSet};
 
 use std::path::{Path, PathBuf};
@@ -279,6 +281,8 @@ impl TunnelStore {
             icon: normalize_icon(&req.icon)?,
             group: normalize_group(&req.group)?,
             in_app: req.in_app,
+            // 新建的排到最后：中途插队会让已有布局整体位移。
+            app_order: file.items.len() as i32,
         };
         // 入口模式在保存时就校验：拒绝「本地 http + 远端 https」，不让坏配置落盘。
         entry_mode(&dto)?;
@@ -571,6 +575,7 @@ impl TunnelStore {
             icon: String::new(),
             group: String::new(),
             in_app: true,
+            app_order: 0,
         };
         Ok(find_conflict(&file.items, &candidate, exclude_id))
     }
@@ -1257,6 +1262,7 @@ mod tests {
             icon: String::new(),
             group: String::new(),
             in_app: true,
+            app_order: 0,
         };
         let duplicate = TunnelDto {
             name: "测试".into(),
