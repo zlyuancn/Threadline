@@ -38,6 +38,7 @@
 | **Autostart** | One switch; with it on, tunnels work before anyone logs in (SYSTEM scheduled task) |
 | **Global hotkey** | `Ctrl+Alt+T` summons the panel; rebindable |
 | **Plain TCP** | RDP, SSH, MySQL, Redis — just port forwarding with different default ports |
+| **Server manage** | Open **Manage** on a tunnel to see the machine itself: CPU, memory, load, disks, traffic, disk IO, top processes, containers; terminal / files / firewall already have reserved slots |
 
 Local forwarding only (`-L`). **No** remote forwarding (`-R`), **no** SOCKS5 (`-D`).
 
@@ -68,6 +69,7 @@ This is the only place you need to read before trusting it.
 | Action | What changes | When | Admin required |
 |---|---|---|---|
 | SSH connection | Outbound only, nothing written | When a tunnel starts | No |
+| Server overview | One **read-only** probe on the remote (reads `/proc`, `df -kP`, `ps`, `docker ps`); writes nothing | Opening the manage page or clicking refresh | No |
 | Domain access | One managed block in `C:\Windows\System32\drivers\etc\hosts` (`# >>> threadline domain access (managed) >>>`) | Clicking **Write hosts** on the in-app banner | **Yes** (one UAC) |
 | HTTPS for domains | A `Threadline Local Gateway CA` root installed into the **current user's** trusted root store | *Install CA* in settings | No (`HKCU`) |
 | Domain access | Domain appended to `HKCU\...\Internet Settings\ProxyOverride` (existing entries preserved) | Clicking **Sync** on the in-app banner | No (`HKCU` only) |

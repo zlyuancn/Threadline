@@ -35,6 +35,91 @@
 - [ ] 转发目标长期不回包时，状态里给出「疑似目标不可达」的提示（现在只有超时后的 last_error）。
 - [ ] 凭据编辑目前不能改类型/登录用户（属身份），若确需变更应给出"新建并切换"的引导。
 
+### 桌面壳层（2026-11-16 完成）
+
+- [x] 设置 → 全局快捷键加开关「呼出时回到「应用」页」（默认开）。开：热键 / 托盘 / 再次启动都回到
+      「应用」；关：停在上次所在页。冷启动无论开关都先显示「应用」（它就是这个应用的首屏）。
+      偏好存 `localStorage`（与主题同层），核心与助手都不参与。
+- [x] 进入服务器管理页时左侧栏自动收起（宽度过渡到 0 + `inert`），返回隧道页自动展开。
+      管理页自带模块导航，再叠一条侧栏会把内容挤成两条细缝。
+
+### 应用页布局（编辑模式，2026-11-16 完成）
+
+- [x] 应用页「编辑」开关：拖动磁贴改顺序与归属、组头按钮（置顶/上移/下移/置底）调整分组顺序、
+      点组名就地改名、删组（成员回落未分组）、新建空组、磁贴上的分组下拉可选已有或直接输入新名字建组。
+      设计：`docs/plans/2026-11-16-app-page-edit-mode-design.md`。
+      数据：`TunnelDto.app_order`（只影响应用页排列）+ `app_groups.json`（组顺序与空组），
+      成员归属仍是转发自己的 `group`。接口：`GET|PUT /app-groups`、`POST /app-groups/rename|delete`、
+      `PUT /tunnels/app-order`。**不碰端口转发**：实测 39 条转发在改布局前后全部 running。
+      单测：核心 11 项、前端 14 项。
+- [ ] 多选批量移动 / 批量改分组（一次拖一个够用时不做）。
+- **坑位记录**：应用页拖拽**必须用指针事件**（`pointerdown/move/up` + `elementFromPoint`），
+  不能用 HTML5 `draggable`。Windows 上 Tauri 接管了原生拖放（`dragDropEnabled` 默认开），
+  `draggable=true` 的元素收不到 `dragstart`，表现是"怎么拖都不动"。
+  同类实现：首页排序弹窗的 `.order-item`。
+
+### 服务器管理（管理页）
+
+- [x] **P1 概览（2026-11-16 完成）**：隧道卡片「管理」→ 独立管理页；`GET /servers/{id}/admin/overview`
+      借隧道已有会话执行**一条只读** `sh` 脚本（`/proc` + `df -kP` + `ps -eo` + `docker ps`，内含 0.3s
+      二次采样算网络/磁盘速率），核心解析成 CPU / 内存 / 负载 / 磁盘 / 网络 / 磁盘 IO / Top 进程 / 容器，
+      单块失败只进 `degraded` 不影响整页；模块清单由**核心**给（`ready` / `planned` / `unavailable`），
+      未实现模块只有导航项与"规划中"说明，不放半成品按钮。设计：`docs/plans/2026-11-16-server-admin-design.md`。
+      单测：核心 15 项（脚本只读性 + 解析 + 清单）、前端 13 项（格式化口径）。
+- [x] **概览分档刷新 + 环形仪表（2026-11-16 完成）**：无开关，进页面即开始。
+      核心按 `?probe=live|disk-io|disks` 出三段脚本，前端各档独立递归 `setTimeout`：
+      CPU/内存/流量 1s、磁盘 IO 5s、磁盘容量 10s（实测 284 / 264 / 61ms，完整 758ms）。
+      每秒那条**不跑 `df`**——挂了网络盘时 `df` 会把整条命令拖住。
+      **不看就不采**：判据 = 有 serverId + 窗口有焦点 + `document.hidden` 为假 + 停在概览模块，
+      任一不满足就清三档定时器；焦点回来各补一拍。焦点靠 `getCurrentWindow().onFocusChanged`，
+      不能只靠 `document.hidden`（Tauri 隐藏窗口不一定触发 visibilitychange）。
+      展示：CPU/内存/磁盘全部用**环形表**（`RingGauge.vue`，≥70% 黄、≥90% 红），
+      去掉负载、Top 进程、容器三块；每块默认 2 行，「全部 N 个」可点开（展开状态不落盘）。
+- [x] **概览第二轮打磨（2026-11-16 完成）**：
+      - 系统信息改成键值表：主机名 / 发行版本 / 内核 / 架构 / **主机地址**（`hostname -I` 取第一个
+        非回环，失败退回 `ip -4 -o addr`）/ **启动时间**（前端用 `now - uptime` 算）/ 运行时间（精确到秒）。
+      - CPU / 内存 / 磁盘 IO 卡片背景画**最近 1 分钟**分时图（`Sparkline.vue`）。历史只存在内存，
+        离开页面即清；X 轴按固定槽位右对齐，不满一分钟时左边留空，不伪装成满格。
+      - 磁盘**按盘而不是按挂载点**：新增 `lsblk -b -P` 采集（`BlockDisk`），取 TYPE=disk 的物理盘，
+        排除 `zram`/`loop`/`rom`；分区用量按名字前缀归到所属盘。`df` 里没被物理盘认领的
+        **根分区与 Unraid 阵列（shfs）**补成额外行——否则阵列占用在概览里完全看不见。
+        排序按已用绝对量降序（21 GB 的 1% 阵列排在 28% 的 11 GB 系统盘前面），未挂载的沉底。
+      - **GPU**：与 CPU / 内存并排成三列。采集优先 `nvidia-smi --query-gpu`（唯一能同时拿到
+        显存与温度的通用途径），否则退回 `/sys/class/drm/card*/device/gpu_busy_percent` +
+        `uevent` 的 `DRIVER=` 映射成「AMD 显卡 / Intel 核显」。两来源单位不同（MB vs 字节），
+        行内带 `nvidia|` / `sysfs|` 前缀，解析侧据此折算成 kB。没有 GPU 时后端返回空数组，
+        前端连卡片都不渲染（不留空位）。实测热态 `probe=live` 仍是 280–300ms，GPU 段可忽略。
+      - **内存环分段**：已用 / 缓存 / Buffers 三段不同颜色（`RingGauge` 新增 `segments`，
+        每段一个 `<circle>` 靠 `stroke-dashoffset` 错开）。坑：核心的 `used_kb` 是
+        `total − MemAvailable`，与 cached/buffers **直接相加会超过 100%**，必须先扣已用再把
+        缓存放进剩余空间，否则环会画重。实测 22.28 GB 机器：已用 17.85 + 缓存 3.33 + Buffers 0 = 95.1%。
+      - **磁盘卡合并**：占用（`block_disks`）与读写（`disk_io`）按设备名 join 成一张卡，
+        一块盘一行（环 + 名字 + 容量 + `R/W` + 自己的曲线），卡占整行；网络同样一项一行。
+      - **ZFS 识别**：`lsblk` 加采 `FSTYPE`，并用 `zpool list -vHp -o name,size,alloc` 取池清单
+        （不缩进 = 池，缩进 = 成员，设备名去 `/dev/` 前缀）。成员盘自己没有挂载点，光看 `df`
+        会以为"未挂载"，现在显示「池 deva · 1.9 TB / 5.6 TB」。`zpool` 不可用时退到
+        `FSTYPE=zfs_member` 标成「池 zfs」。实测：3 块 1.9 TB NVMe → 池 `deva` 5.6 TB / 已用 1.9 TB。
+      - **内存分源**：跟着 10 秒那一档采（`@@memdetail`）——VM 取 `ps -eo rss,comm` 里
+        `qemu|kvm` 的 RSS 合计，容器取 cgroup（兼容 v2 的 `system.slice/docker-*.slice/memory.current`、
+        `cgroup/docker/*/memory.current` 与 v1 的 `memory/docker/*/memory.usage_in_bytes`），
+        ZFS 取 `/proc/spl/kstat/zfs/arcstats` 的 `size`。实测 deva：VM 4.12 GB、容器 2.98 GB、ARC 4.01 GB。
+        两个坑：① ARC 在 Linux 上**算在 used 里**（`MemAvailable` 不含它），必须从 used 扣，
+        与 used 相加会把环画到 96% 而实际只有 84%；② `Cached` 里含 **tmpfs/shmem**，
+        那部分删不掉也回收不了（实测 deva 的 Shmem 有 3.12 GB，几乎等于全部 Cached），
+        所以「缓存」= `Cached + Buffers − Shmem`，否则"能腾多少"会虚报。
+      - **刷新频率收敛为两档**：原本担心"刷新本身有负载"才拆成 1s / 5s / 10s，实测完全不是——
+        每档 280–300ms 里 200ms 是固定采样窗口的 `sleep`，命令本身只花几毫秒。于是把磁盘 IO
+        并进 1 秒档（`/proc/diskstats` 只是一次 cat），只剩两档。容量仍然留在 10 秒，理由换成
+        了真正成立的那条：`df` 会逐个问挂载点，挂 NFS/SMB 时等于每秒朝远端查一次容量。
+        实测 live 297–305ms、disks 125ms。
+- [ ] **P2 进程管理**：全量进程列表 + 结束进程（写操作，需二次确认与独立契约）。
+- [ ] **P2 文件管理**：SFTP 列目录 / 下载 / 上传 / 删除；大文件必须流式，不能一次性读进内存。
+- [ ] **P2 终端**：`request_pty` + 双向 channel；前端要 xterm.js，先评估体积再引入。
+- [ ] **P3 容器管理 / 网络管理 / 防火墙**：启停与日志；网卡路由与监听端口；ufw/firewalld/iptables 规则查看。
+- [ ] **P4 服务与日志**：systemd 单元启停、journalctl 跟随。
+- [ ] **[环境] 真机验证概览**：真实 Linux 服务器上跑一遍，确认无 docker、多挂载点、`ps` 不支持 `--sort`
+      三种情况都只降级不报错。
+
 ### 域名访问（hosts + 回环入口）
 
 - [ ] 设计已定稿（2026-11-12）：`docs/plans/2026-11-12-domain-access-design.md`。
@@ -131,6 +216,15 @@
   - 2026-11-12：**域名访问**（用户提出、参考 joyshare）——定为「hosts + 一域名一回环 IP」，
     不做 HTTP 正向代理、不做 SNI 分流、不做 MITM；hosts 写入需 UAC 提权，保存成功即视为成功、
     提权失败留横幅。设计见 `docs/plans/2026-11-12-domain-access-design.md`。
+  - 2026-11-16：**服务器管理**（用户提出）——隧道卡片给一个「管理」入口，点进去是独立管理页；
+    先做只读概览（系统/CPU/内存/负载/磁盘/流量/磁盘 IO/进程/容器），终端 / 文件 / 防火墙 / 网络 /
+    服务等模块只留位置（核心给清单标 `planned`），写操作类模块逐个另立契约。
+    不新建 SSH 连接（复用隧道会话），不落盘，不做 Windows 采集。
+    设计见 `docs/plans/2026-11-16-server-admin-design.md`。
+  - 2026-11-16：**应用页编辑模式**（用户提出）——四项全做：拖动磁贴改顺序/归属、磁贴改分组（含输新名建组）、
+    组改名、组排序与空组。布局存核心（`TunnelDto.app_order` + `app_groups.json`），成员归属仍用转发自己的
+    `group`；**转发逻辑一律不读布局**，改布局不动任何一条隧道。设计见
+    `docs/plans/2026-11-16-app-page-edit-mode-design.md`。
   - 2026-11-13：**私有远端停止推送**——`git@git.zly.m:zlyuancn/threadline.git` 不再作为推送目标；
     用户改为从公共仓库同步代码。此后本仓只做本地 commit，AI 会话不得对该远端执行 push；
     何时与公共仓库对齐、是否重建历史由用户决定。
