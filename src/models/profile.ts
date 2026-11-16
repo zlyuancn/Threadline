@@ -55,6 +55,18 @@ export interface ProfileServer {
 export interface ProfilePreferences {
   theme: string;
   hotkey: string;
+  /**
+   * 点开一个应用（浏览器接手）之后，是否把面板收起来。
+   *
+   * 缺省视为 `false`：老包没有这个字段时不能把行为悄悄改成"点完就消失"。
+   */
+  hide_on_launch?: boolean;
+  /**
+   * 应用列表是否显示全部转发（否则只看随隧道自启的）。
+   *
+   * 缺省视为 `true`，与界面的默认值一致。
+   */
+  show_all_apps?: boolean;
 }
 
 export interface ProfileDocument {

@@ -17,7 +17,7 @@ import {
 } from '../models/forwardView';
 import { formatRate, useTrafficStore } from '../models/traffic';
 import { protocolGlyph, useForwardIcon } from '../models/forwardIcon';
-import { openExternal } from '../api/native';
+import { openForwardUrl } from '../api/native';
 import type { TunnelView } from '../api/types';
 
 const props = defineProps<{
@@ -59,7 +59,7 @@ const blocked = computed(() =>
 );
 
 function openLocal() {
-  openExternal(urlOf(props.view as unknown as ForwardLike)).catch((e: unknown) => {
+  openForwardUrl(urlOf(props.view as unknown as ForwardLike)).catch((e: unknown) => {
     ElMessage.error(e instanceof Error ? e.message : String(e));
   });
 }

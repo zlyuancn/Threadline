@@ -12,6 +12,7 @@ function applier(overrides: Partial<PreferenceApplier> = {}): PreferenceApplier 
     applyTheme: vi.fn(),
     currentHotkey: () => current.hotkey,
     rebindHotkey: vi.fn(async () => null),
+    applyDesktop: vi.fn(),
     ...overrides,
   };
 }
@@ -38,12 +39,51 @@ describe('diffPreferences', () => {
   });
 });
 
+describe('diffPreferences · 界面开关', () => {
+  it('lists a switch that flips, and stays quiet when it does not', () => {
+    // 当前默认：不自动隐藏、显示全部
+    const lines = diffPreferences(
+      { ...current, hide_on_launch: false, show_all_apps: true },
+      { ...current, hide_on_launch: true, show_all_apps: true },
+    );
+    expect(lines.map((line) => line.key)).toEqual(['hide_on_launch']);
+    expect(lines[0].label).toContain('关 → 开');
+  });
+
+  it('treats a missing field in an old package as "do not change"', () => {
+    // 老包不带这两个字段：不能把用户的设置悄悄按 false 覆盖
+    const lines = diffPreferences({ ...current, hide_on_launch: true, show_all_apps: false }, current);
+    expect(lines).toEqual([]);
+  });
+});
+
 describe('applyPreferences', () => {
   it('applies a known theme and a working hotkey', async () => {
     const deps = applier();
     const failures = await applyPreferences({ theme: 'ocean', hotkey: 'Ctrl+Shift+T' }, deps);
     expect(failures).toEqual([]);
     expect(deps.applyTheme).toHaveBeenCalledWith('ocean');
+  });
+
+  it('writes both desktop switches through one call', async () => {
+    const deps = applier();
+    await applyPreferences(
+      { theme: '', hotkey: '', hide_on_launch: true, show_all_apps: false },
+      deps,
+    );
+    expect(deps.applyDesktop).toHaveBeenCalledWith({
+      hideOnLaunch: true,
+      showAllApps: false,
+    });
+  });
+
+  it('passes undefined for switches the package does not mention', async () => {
+    const deps = applier();
+    await applyPreferences({ theme: '', hotkey: '' }, deps);
+    expect(deps.applyDesktop).toHaveBeenCalledWith({
+      hideOnLaunch: undefined,
+      showAllApps: undefined,
+    });
   });
 
   it('skips an unknown theme instead of blanking the UI', async () => {

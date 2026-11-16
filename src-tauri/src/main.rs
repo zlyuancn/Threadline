@@ -235,6 +235,18 @@ fn show_window(app: &AppHandle) {
     }
 }
 
+/// `hide_window`：把面板收进托盘。
+///
+/// 走命令而不是前端直接调 `getCurrentWindow().hide()`：WebView 侧需要 `core:window:allow-hide`
+/// 权限，而这里的窗口管理本来就集中在 Rust（热键 toggle、关窗拦截都走 `window.hide()`），
+/// 多授权一条前端能力只为收个窗口不划算，也容易忘。前端调用失败也不再静默吞掉。
+#[tauri::command]
+fn hide_window(app: AppHandle) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        let _ = window.hide();
+    }
+}
+
 /// 托盘菜单里的「停止服务」：直接调核心的 `POST /shutdown`。
 /// 这是 CAW C4 的体现——低权限助手通过 API 让（可能的）提权核心优雅退出。
 fn request_shutdown() -> Result<(), String> {
@@ -1815,6 +1827,7 @@ fn main() {
             hotkey::get_hotkey,
             hotkey::set_hotkey,
             core_state,
+            hide_window,
             bootstrap_snapshot
         ])
         .setup(|app| {

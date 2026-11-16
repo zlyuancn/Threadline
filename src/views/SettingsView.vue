@@ -16,6 +16,7 @@ import { useHotkeyStore } from '../models/hotkey';
 import { useServersStore } from '../models/servers';
 import { THEMES, useThemeStore } from '../models/theme';
 import { useUpdateStore } from '../models/update';
+import { useDesktopPrefsStore } from '../models/desktopPrefs';
 import { withTimeout } from '../models/asyncAction';
 import {
   openExternal,
@@ -29,6 +30,7 @@ const hotkey = useHotkeyStore();
 const servers = useServersStore();
 const theme = useThemeStore();
 const update = useUpdateStore();
+const prefs = useDesktopPrefsStore();
 const saving = ref(false);
 const serviceBusy = ref(false);
 
@@ -747,6 +749,21 @@ async function toggle(enabled: boolean) {
       在任何窗口按下即可呼出/收起面板。至少要带一个修饰键；如果组合已被其他程序占用，
       会直接告诉你并保留原来的设置。
     </p>
+    <div class="service-row" style="margin-top: 12px">
+      <el-switch
+        :model-value="prefs.summonToApps"
+        size="small"
+        @update:model-value="
+          (value: string | number | boolean) => prefs.setSummonToApps(value === true)
+        "
+      />
+      <span style="font-size: 12px; color: var(--text-2)">呼出时回到「应用」页</span>
+    </div>
+    <p class="hint">
+      开：每次按快捷键、点托盘或再次启动，都直接回到应用入口。程序刚启动时也总是「应用」。
+      关：呼出时停在上次所在的页面，适合边看日志边盯终端的人。
+    </p>
+
   </div>
 
   <div class="panel">

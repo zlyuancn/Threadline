@@ -19,7 +19,7 @@ import {
   type ForwardLike,
 } from '../models/forwardView';
 import { protocolGlyph, useForwardIcon } from '../models/forwardIcon';
-import { openExternal } from '../api/native';
+import { openForwardUrl } from '../api/native';
 import type { TunnelView } from '../api/types';
 
 const props = defineProps<{
@@ -71,7 +71,7 @@ function openLocal() {
   if (!clickable.value) {
     return;
   }
-  openExternal(urlOf(asForward.value)).catch((e: unknown) => {
+  openForwardUrl(urlOf(asForward.value)).catch((e: unknown) => {
     ElMessage.error(e instanceof Error ? e.message : String(e));
   });
 }

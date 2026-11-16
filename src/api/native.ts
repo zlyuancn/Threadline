@@ -2,6 +2,7 @@
 // 而不是静默什么都不做。
 
 import { invoke } from '@tauri-apps/api/core';
+import { readHideOnLaunch } from '../models/desktopPrefs';
 
 export function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -148,6 +149,37 @@ export async function openExternal(url: string): Promise<void> {
     return;
   }
   await invoke('open_external', { url });
+}
+
+/**
+ * 收起主窗口（托盘图标仍在，热键可再唤出）。
+ *
+ * 走 Agent 的 `hide_window` 命令，而不是 `getCurrentWindow().hide()`：
+ * WebView 侧调窗口 API 需要额外授权 `core:window:allow-hide`，权限没开时
+ * Promise 会 reject——上一版把它吞掉了，于是"开关打开了但点了没反应"。
+ */
+export async function hideWindow(): Promise<void> {
+  if (!isTauri()) {
+    return;
+  }
+  try {
+    await invoke('hide_window');
+  } catch (error) {
+    // 收不起来不是致命问题，但不能静默：否则又是一个"点了没反应"。
+    console.warn('[threadline] 收起窗口失败', error);
+  }
+}
+
+/**
+ * 点开一个转发地址：先交给系统浏览器，再按偏好决定要不要把自己收起来。
+ *
+ * 只给"应用磁贴"用。设置页里的「打开发布页」不走这条——那里没有"切走去干活"的语义。
+ */
+export async function openForwardUrl(url: string): Promise<void> {
+  await openExternal(url);
+  if (readHideOnLaunch()) {
+    await hideWindow();
+  }
 }
 
 export interface DataDirStatus {
@@ -408,6 +440,28 @@ export async function onWindowShown(handler: () => void): Promise<() => void> {
   }
   const { listen } = await import('@tauri-apps/api/event');
   return listen('window:shown', () => handler());
+}
+
+/**
+ * 订阅窗口焦点变化。
+ *
+ * 用来判断"用户现在到底有没有在看"：面板被热键收起、最小化、或切到别的窗口时
+ * 都会收到 `focused=false`。**不要只靠 `document.hidden`**——Tauri 隐藏窗口只是
+ * 把 HWND 藏起来，WebView 不一定会发 `visibilitychange`，后台任务会一直空转。
+ */
+export async function onWindowFocusChange(
+  handler: (focused: boolean) => void,
+): Promise<() => void> {
+  if (!isTauri()) {
+    return () => undefined;
+  }
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    return await getCurrentWindow().onFocusChanged(({ payload }) => handler(payload));
+  } catch {
+    // 订阅失败不该影响页面：最坏情况退化成"一直按可见处理"。
+    return () => undefined;
+  }
 }
 
 /**

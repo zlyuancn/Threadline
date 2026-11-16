@@ -3,17 +3,15 @@ import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { isTauri, saveProfilePackage } from '../api/native';
 import type { TunnelDto } from '../api/types';
-import { useHotkeyStore } from '../models/hotkey';
+import { readPreferences } from '../models/preferences';
 import { buildProfile, packageFileName, writePackage } from '../models/profile';
 import { useServersStore } from '../models/servers';
-import { readStoredTheme } from '../models/theme';
 import { useTunnelsStore } from '../models/tunnels';
 
 const open = defineModel<boolean>({ required: true });
 
 const servers = useServersStore();
 const tunnels = useTunnelsStore();
-const hotkey = useHotkeyStore();
 
 /** 勾选状态用"排除法"存：默认全选，用户取消的才记下来。 */
 const excludedServers = ref(new Set<string>());
@@ -132,9 +130,8 @@ async function doExport(): Promise<void> {
       forwardIds: selectedForwardIds.value,
       includeIcons: includeIcons.value,
       includeFingerprint: includeFingerprint.value,
-      ...(includePreferences.value
-        ? { preferences: { theme: readStoredTheme(), hotkey: hotkey.saved } }
-        : {}),
+      // 用 readPreferences 而不是手写字段：偏好一多，手写必然漏
+      ...(includePreferences.value ? { preferences: readPreferences() } : {}),
     });
     const bytes = writePackage(built);
     const name = packageFileName();
@@ -225,7 +222,9 @@ watch(open, (value) => {
     <div class="pf-options">
       <el-checkbox v-model="includeIcons">包含自定义图标</el-checkbox>
       <el-checkbox v-model="includeFingerprint">包含已信任的主机指纹</el-checkbox>
-      <el-checkbox v-model="includePreferences">包含本机偏好（主题、呼出快捷键）</el-checkbox>
+      <el-checkbox v-model="includePreferences">
+        包含本机偏好（主题、呼出快捷键、界面开关）
+      </el-checkbox>
     </div>
     <p class="hint">
       关掉指纹后，对方首次连接会重新确认服务端身份；关掉图标不影响转发本身。
