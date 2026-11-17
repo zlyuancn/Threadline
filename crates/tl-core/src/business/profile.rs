@@ -16,7 +16,7 @@ use tl_protocol::{
 };
 
 use crate::models::server::ServerStore;
-use crate::models::tunnel::{ConflictKind, TunnelStore};
+use crate::models::tunnel::TunnelStore;
 
 /// 图标上限：与 `normalize_icon` 的 200KB 字符限制留出余量。
 /// 超限时丢图标保条目，而不是整条导入失败。
@@ -119,15 +119,19 @@ fn plan_forward(
         );
     }
 
-    // 包内地址/域名冲突
+    // 包内入口冲突：同域名的条目会落到同一个回环地址上（靠端口区分），
+    // 所以同域名只有端口撞了才算重复；没有域名的仍按本机地址比。
     if !forward.domain.is_empty() {
         if let Some((name, _, _, _)) = accepted
             .iter()
-            .find(|(_, _, _, domain)| !domain.is_empty() && *domain == forward.domain)
+            .find(|(_, _, port, domain)| *domain == forward.domain && *port == forward.local_port)
         {
             return (
                 "domain_taken".to_string(),
-                Some(format!("同一个包里域名 {} 重复", forward.domain)),
+                Some(format!(
+                    "同一个包里域名 {} 的端口 {} 重复",
+                    forward.domain, forward.local_port
+                )),
                 Some(name.clone()),
             );
         }
@@ -145,7 +149,8 @@ fn plan_forward(
     }
 
     // 与现有配置比较：规则在模型里，这里只做翻译
-    // （`config_conflict` 在内部按 create 的方式模拟域名回环地址分配）
+    // （`config_conflict` 在内部按 create 的方式模拟域名回环地址分配，
+    //   同域名会复用已有回环地址，所以冲突只可能是端口撞了）
     match tunnels.config_conflict(
         &forward.local_host,
         forward.local_port,
@@ -153,17 +158,9 @@ fn plan_forward(
         None,
     ) {
         Ok(None) => ("ok".to_string(), None, None),
-        Ok(Some((ConflictKind::Address, name))) => (
+        Ok(Some((name, addr))) => (
             "port_taken".to_string(),
-            Some(format!(
-                "本机 {}:{} 已被转发「{}」占用",
-                forward.local_host, forward.local_port, name
-            )),
-            Some(name),
-        ),
-        Ok(Some((ConflictKind::Domain, name))) => (
-            "domain_taken".to_string(),
-            Some(format!("域名 {} 已被转发「{}」占用", forward.domain, name)),
+            Some(format!("入口 {addr} 已被转发「{name}」占用")),
             Some(name),
         ),
         Err(e) => ("invalid".to_string(), Some(e.to_string()), None),
@@ -635,7 +632,7 @@ mod tests {
         add_forward(&f, &srv, "web", 18080, "a.example.com");
         add_forward(&f, &srv, "plain", 18080, "");
 
-        // 包内：同名连接 a + 三条转发（抢端口 / 抢域名 / 干净）
+        // 包内：同名连接 a + 四条转发（抢端口 / 抢域名端口 / 同域名换端口 / 干净）
         let plan = plan(
             &f.servers,
             &f.tunnels,
@@ -645,7 +642,8 @@ mod tests {
                     vec![
                         pack_forward("web", 18080, ""),
                         pack_forward("dup-port", 18080, ""),
-                        pack_forward("mine", 18099, "a.example.com"),
+                        pack_forward("mine", 18080, "a.example.com"),
+                        pack_forward("mine-ssh", 22, "a.example.com"),
                         pack_forward("fresh", 18099, ""),
                     ],
                 )],
@@ -663,10 +661,17 @@ mod tests {
         // 不同名但抢同一端口（127.0.0.1:18080 归 plain）
         assert_eq!(server.forwards[1].action, "port_taken");
         assert_eq!(server.forwards[1].occupied_by.as_deref(), Some("plain"));
-        // 抢现有域名
-        assert_eq!(server.forwards[2].action, "domain_taken");
-        // 干净的一条
+        // 抢现有域名的**同一个端口**：域名入口 127.0.0.2:18080 已被 web 占着
+        assert_eq!(server.forwards[2].action, "port_taken");
+        assert_eq!(server.forwards[2].occupied_by.as_deref(), Some("web"));
+        assert_eq!(
+            server.forwards[2].reason.as_deref(),
+            Some("入口 127.0.0.2:18080 已被转发「web」占用")
+        );
+        // 同域名换个端口（SSH 22）合法：会共用 127.0.0.2
         assert_eq!(server.forwards[3].action, "ok");
+        // 干净的一条
+        assert_eq!(server.forwards[4].action, "ok");
     }
 
     #[test]

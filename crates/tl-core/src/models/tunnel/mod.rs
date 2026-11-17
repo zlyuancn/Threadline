@@ -10,6 +10,8 @@
 //! - 状态迁移只走 `fsm::next_state`，非法迁移直接拒绝（不允许静默忽略事件）。
 //! - 监听占用由本模型登记与释放；键是 `effective_addr`（域名入口是 `(domain_host, port)`，
 //!   否则是 `(local_host, port)`），**所有登记/释放/唯一性判断只走这一个函数**。
+//! - 域名不是独占键：**同域名的多条转发共用一个回环地址**（hosts 一条域名只能映射一个地址），
+//!   靠端口区分（`git.example.com` 的 443 走网页、22 走 SSH）。唯一性只看 `(host, port)`。
 //! - 退避与并发预算来自底座，本模型不实现私有重试轮子。
 
 pub mod engine;
@@ -148,6 +150,22 @@ fn normalize_remote_scheme(raw: Option<String>) -> Result<Option<String>> {
     }
 }
 
+/// 域名入口地址：**同域名的多条转发共用一个回环地址**，靠端口区分。
+///
+/// hosts 一条域名只能映射一个地址，所以 `git.zly.m` 的网页端（443）与 SSH（22）
+/// 必须落在同一个 `127.0.0.x` 上；新域名才从池里取一个没人用的。
+fn domain_host_for(items: &[TunnelDto], domain: &str, exclude: Option<&str>) -> Result<String> {
+    if let Some(host) = items
+        .iter()
+        .filter(|t| Some(t.id.as_str()) != exclude && t.domain == domain)
+        .map(|t| t.domain_host.as_str())
+        .find(|host| !host.is_empty())
+    {
+        return Ok(host.to_string());
+    }
+    allocate_domain_host(items, exclude)
+}
+
 /// 从池里取一个未被占用的回环地址。
 fn allocate_domain_host(items: &[TunnelDto], exclude: Option<&str>) -> Result<String> {
     let used: HashSet<&str> = items
@@ -260,7 +278,7 @@ impl TunnelStore {
         let domain_host = if domain.is_empty() {
             String::new()
         } else {
-            allocate_domain_host(&file.items, None)?
+            domain_host_for(&file.items, &domain, None)?
         };
         let taken: HashSet<String> = file.items.iter().map(|t| t.id.clone()).collect();
         let dto = TunnelDto {
@@ -374,14 +392,10 @@ impl TunnelStore {
                 candidate.domain = String::new();
                 candidate.domain_host = String::new();
             } else {
-                // 已有地址且没被别的转发占用 → 复用；否则重新分配。
-                let keep = !candidate.domain_host.is_empty()
-                    && !file
-                        .items
-                        .iter()
-                        .any(|t| t.id != id && t.domain_host == candidate.domain_host);
+                // 域名没变就保持原地址；改域名则跟同域名的同伴共用，或从池里取新的。
+                let keep = candidate.domain == domain && !candidate.domain_host.is_empty();
                 if !keep {
-                    candidate.domain_host = allocate_domain_host(&file.items, Some(id))?;
+                    candidate.domain_host = domain_host_for(&file.items, &domain, Some(id))?;
                 }
                 candidate.domain = domain;
             }
@@ -537,7 +551,7 @@ impl TunnelStore {
             .any(|(_, p)| *p == port)
     }
 
-    /// 配置级冲突：返回（冲突类型, 占用者名称）。
+    /// 配置级冲突：返回（占用者名称, 冲突的入口地址）。
     ///
     /// 与 `is_port_taken` 的区别：那个查的是**运行期**监听表、不分 host，
     /// 只能回答"现在能不能 bind"，不能回答"配置里是否已经有一条"。
@@ -548,14 +562,14 @@ impl TunnelStore {
         local_port: u16,
         domain: &str,
         exclude_id: Option<&str>,
-    ) -> Result<Option<(ConflictKind, String)>> {
+    ) -> Result<Option<(String, String)>> {
         let domain = validate_domain(domain)?;
         let file = self.load()?;
         let domain_host = if domain.is_empty() {
             String::new()
         } else {
-            // 与 create 相同的分配规则：模拟"新加一条"，域名入口会拿到一个新的回环地址。
-            allocate_domain_host(&file.items, exclude_id)?
+            // 与 create 相同的分配规则：模拟"新加一条"，同域名会落到同一个回环地址。
+            domain_host_for(&file.items, &domain, exclude_id)?
         };
         let candidate = TunnelDto {
             id: String::new(),
@@ -780,19 +794,12 @@ fn retry_hint(event: &TunnelEvent) -> Option<u64> {
     }
 }
 
-/// 冲突类型：界面据此显示「端口被占」还是「域名被占」。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConflictKind {
-    Address,
-    Domain,
-}
-
-/// 唯一性判定的核心：返回第一个冲突的（类型, 占用者名称）。
+/// 唯一性判定的核心：返回第一个冲突的（占用者名称, 入口地址）。
 fn find_conflict(
     items: &[TunnelDto],
     candidate: &TunnelDto,
     exclude: Option<&str>,
-) -> Option<(ConflictKind, String)> {
+) -> Option<(String, String)> {
     let (host, port) = effective_addr(candidate);
     for other in items {
         if Some(other.id.as_str()) == exclude {
@@ -800,33 +807,24 @@ fn find_conflict(
         }
         let (other_host, other_port) = effective_addr(other);
         if other_host == host && other_port == port {
-            return Some((ConflictKind::Address, other.name.clone()));
-        }
-        if !candidate.domain.is_empty() && other.domain == candidate.domain {
-            return Some((ConflictKind::Domain, other.name.clone()));
+            return Some((other.name.clone(), format!("{host}:{port}")));
         }
     }
     None
 }
 
-/// 唯一性：监听地址与域名都不能撞。
+/// 唯一性：**入口地址**（`effective_addr`）不能撞。
 ///
+/// 域名不再是独占键：同域名的多条转发共用同一个回环地址、靠端口区分
+/// （`git.zly.m` 上 443 走网页、22 走 SSH）。所以这里只比 `(host, port)`。
 /// 错误文案保留「已被…占用」——接口层用 `message.contains("已被")` 判 409。
 fn ensure_unique_in(
     items: &[TunnelDto],
     candidate: &TunnelDto,
     exclude: Option<&str>,
 ) -> Result<()> {
-    if let Some((kind, name)) = find_conflict(items, candidate, exclude) {
-        let (host, port) = effective_addr(candidate);
-        return Err(match kind {
-            ConflictKind::Address => {
-                anyhow!("地址 {host}:{port} 已被转发「{name}」占用，换一个端口或域名")
-            }
-            ConflictKind::Domain => {
-                anyhow!("域名 {} 已被转发「{name}」占用", candidate.domain)
-            }
-        });
+    if let Some((name, addr)) = find_conflict(items, candidate, exclude) {
+        return Err(anyhow!("地址 {addr} 已被转发「{name}」占用，换一个端口"));
     }
     Ok(())
 }
@@ -1320,21 +1318,30 @@ mod tests {
         with_domain.domain = "a.example.com".into();
         f.tunnels.create(with_domain).expect("b");
 
-        // 端口占用：返回占用者名称，供界面显示「已被 a 占用」
+        // 端口占用：返回占用者名称与入口地址，供界面显示「已被 a 占用」
         assert_eq!(
             f.tunnels
                 .config_conflict("127.0.0.1", 18080, "", None)
                 .unwrap(),
-            Some((ConflictKind::Address, "a".to_string()))
+            Some(("a".to_string(), "127.0.0.1:18080".to_string()))
         );
 
-        // 域名占用
+        // 同域名的另一条：落到同一个回环地址，端口不同就不算冲突
         assert_eq!(
             f.tunnels
                 .config_conflict("127.0.0.1", 18099, "a.example.com", None)
                 .unwrap(),
-            Some((ConflictKind::Domain, "b".to_string()))
+            None
         );
+
+        // 同域名同端口才算冲突（冲突的是域名入口地址，不是 127.0.0.1）
+        let domain_entry = f
+            .tunnels
+            .config_conflict("127.0.0.1", 18081, "a.example.com", None)
+            .unwrap();
+        let (name, addr) = domain_entry.expect("同域名同端口必须报冲突");
+        assert_eq!(name, "b");
+        assert_eq!(addr, "127.0.0.2:18081");
 
         // 编辑自己不算冲突
         let id = f.tunnels.list().unwrap().items[0].definition.id.clone();
@@ -1736,19 +1743,89 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_domain_is_rejected() {
-        let f = fixture("dupdomain");
-        let mut a = create_req("a", &f.server_id, 18101);
-        a.scheme = "https".into();
-        a.remote_scheme = Some("http".into());
-        a.domain = "home.example.com".into();
-        f.tunnels.create(a).expect("create a");
+    fn same_domain_different_port_shares_loopback_address() {
+        let f = fixture("sharedomain");
+        // 网页端：https + 443
+        let mut web = create_req("web", &f.server_id, 443);
+        web.scheme = "https".into();
+        web.remote_scheme = Some("http".into());
+        web.domain = "git.example.com".into();
+        let a = f.tunnels.create(web).expect("create web");
 
-        let mut b = create_req("b", &f.server_id, 18102);
-        b.scheme = "https".into();
-        b.remote_scheme = Some("http".into());
-        b.domain = "HOME.example.com.".into();
-        let err = f.tunnels.create(b).unwrap_err().to_string();
+        // SSH：纯端口转发 + 22，域名同一个（大小写与末尾点都会被归一）
+        let mut ssh = create_req("ssh", &f.server_id, 22);
+        ssh.scheme = "ssh".into();
+        ssh.domain = "Git.Example.com.".into();
+        let b = f.tunnels.create(ssh).expect("同域名不同端口必须允许");
+
+        let a_host = f.tunnels.view(&a.id).unwrap().definition.domain_host;
+        let b_host = f.tunnels.view(&b.id).unwrap().definition.domain_host;
+        assert_eq!(a_host, "127.0.0.2");
+        assert_eq!(
+            b_host, a_host,
+            "同域名必须共用一个回环地址（hosts 只能写一条）"
+        );
+
+        // 同域名同端口才是冲突
+        let mut dup = create_req("dup", &f.server_id, 22);
+        dup.domain = "git.example.com".into();
+        let err = f.tunnels.create(dup).unwrap_err().to_string();
         assert!(err.contains("已被转发"), "实际错误：{err}");
+    }
+
+    #[test]
+    fn patching_onto_a_domain_reuses_its_address() {
+        let f = fixture("domainpatchshare");
+        let mut web = create_req("web", &f.server_id, 443);
+        web.scheme = "https".into();
+        web.remote_scheme = Some("http".into());
+        web.domain = "git.example.com".into();
+        let a = f.tunnels.create(web).expect("web");
+
+        let mut nas = create_req("nas", &f.server_id, 443);
+        nas.scheme = "https".into();
+        nas.remote_scheme = Some("http".into());
+        nas.domain = "nas.example.com".into();
+        let b = f.tunnels.create(nas).expect("nas");
+        assert_eq!(
+            f.tunnels.view(&b.id).unwrap().definition.domain_host,
+            "127.0.0.3"
+        );
+
+        // 改到别人已用的域名 + 换端口 → 共用对方的回环地址
+        f.tunnels
+            .patch(
+                &b.id,
+                PatchTunnelRequest {
+                    domain: Some("git.example.com".into()),
+                    local_port: Some(22),
+                    ..Default::default()
+                },
+            )
+            .expect("patch domain");
+        assert_eq!(
+            f.tunnels.view(&b.id).unwrap().definition.domain_host,
+            "127.0.0.2"
+        );
+        // 原持有一条不动
+        assert_eq!(
+            f.tunnels.view(&a.id).unwrap().definition.domain_host,
+            "127.0.0.2"
+        );
+
+        // 只改端口不动域名：地址保持不变（不会被重新分配走）
+        f.tunnels
+            .patch(
+                &b.id,
+                PatchTunnelRequest {
+                    local_port: Some(23),
+                    ..Default::default()
+                },
+            )
+            .expect("patch port");
+        assert_eq!(
+            f.tunnels.view(&b.id).unwrap().definition.domain_host,
+            "127.0.0.2"
+        );
     }
 }

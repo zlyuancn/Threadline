@@ -108,7 +108,7 @@ async function copyUrl() {
           <span
             v-if="def.domain"
             class="fcard-note"
-            :title="`域名入口：${def.domain_host}`"
+            :title="`域名入口：${def.domain_host}:${def.local_port}`"
           >{{ def.domain }}</span>
           <span v-if="def.note" class="fcard-note" :title="def.note">{{ def.note }}</span>
         </div>

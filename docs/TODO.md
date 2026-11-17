@@ -122,11 +122,11 @@
 
 ### 域名访问（hosts + 回环入口）
 
-- [ ] 设计已定稿（2026-11-12）：`docs/plans/2026-11-12-domain-access-design.md`。
-      方向：一域名一个回环 IP + hosts 托管区块 + 保存即同步（失败留「待提权」，UAC 由 Agent 拉起
+- [x] 设计已定稿（2026-11-12）：`docs/plans/2026-11-12-domain-access-design.md`。
+      方向：域名回环 IP 池 + hosts 托管区块 + 保存即同步（失败留「待提权」，UAC 由 Agent 拉起
       `tl-core hosts sync`）；HTTPS 按「本地协议 × 远端协议」三格：① http/http 直通、② https/http 本地 CA 终止、
       ③ https/https 透传（参考 joyshare 的入口/回源解耦）；**「本地 http + 远端 https」直接禁止**；② 只支持 HTTP/1.1；
-      域名自动并入 WinINET `ProxyOverride`（Agent 以登录用户身份写，免提权）。待拍板后按 B1–B7 出实施计划。
+      域名自动并入 WinINET `ProxyOverride`（Agent 以登录用户身份写，免提权）。B1–B7 已按此落地。
 - [x] **B0 前置探针（2026-11-12 完成）**：UAC 提权写 hosts 成功且安全客户端未拦截（写入后按原始字节还原，SHA256 一致）；
       无交互桌面下 `Import-Certificate` 写 CurrentUser Root 报「此操作中不允许使用 UI」，证实「无桌面降级为下载」必需；
       有桌面的 certutil 装根链路留到 B6c 真机补测。
@@ -170,14 +170,30 @@
         不带根时 `SEC_E_UNTRUSTED_ROOT`（证明叶子确由本地根签发）；
       - ③ `https://pass.zly.m` → 透传：`ALPN: server did not agree`（由远端决定），证明本地未终止；
       - 禁止组合（本地 http + 远端 https）→ **400**；三条隧道同机 `running`、端口/回环分配互不冲突。
+- [x] **域名共享（2026-11-17 完成）**：`git.zly.m` 既要网页端（443）又要 SSH（22）提交推送。
+      域名从「独占键」降为「共享键」：同域名的多条转发共用同一个 `domain_host`，唯一性只看 `(host, port)`；
+      `domain_host_for()` 统一 create / patch / 导入预判的分配口径，hosts 与代理例外按域名去重；
+      `ConflictKind` 与「域名已被转发占用」的判定一并删除（`find_conflict` 只回地址冲突）。单测 3 项新增/改写。
 - [ ] **观察项**：curl 的 Schannel 后端对本地根叶子报「吊销状态未知」（`--ssl-no-revoke` 后正常）。
       浏览器通常对显式安装的根不强制吊销检查，需在有桌面的 Edge/Chrome 上确认一次；若不通过，再评估给叶子加 CRL DP 的代价。
 - [ ] **仍需外部环境**：卸载清理（安装器未构建）。
 
 ### 需要管理员权限 / 重启
 
-- [ ] **[环境] UAC** `tl-core --autostart on|off` 实测：任务计划增删、`autostart.result.json` 回传
-- [ ] **[环境] 权限边角**：标准用户能否读到 SYSTEM 任务的定义（`schtasks /query /tn ThreadlineCore /xml`）；若读不到，核心的 `GET /autostart` 需要在 ACL 或缓存上补一手
+- [x] **[环境] UAC（2026-11-17 完成）**：`tl-core --autostart on|off` 实测——提权执行后
+      `autostart.result.json` 回传 `ok=true`，任务 `ThreadlineCore` 落盘（BootTrigger + SYSTEM + HighestAvailable +
+      `"D:\ruanjian\threadline\tl-core.exe" --boot --log-dir "C:\Users\Public\Threadline\logs"`），**开机自启功能本身有效**
+      （当日 08:58 核心即以 `run_mode=boot` / `identity=user:MYPC$` 起来）。
+- [x] **[环境] 权限边角（2026-11-17 完成）**：标准用户 `schtasks /query /tn ThreadlineCore /xml ONE` 报 `Access is denied`，
+      `C:\Windows\System32\Tasks\ThreadlineCore` 也读不了。原 `registry::query` 把**任何非零退出**都当「任务不存在」，
+      于是用户身份的核心恒报 `autostart.enabled=false`：提权开启成功、回读仍显示「关闭」，看起来就像自启坏了。
+      改法：查询失败分「明确找不到」与「读不到」两类；读不到时 `AutostartStatus.task_readable=false`，
+      `enabled` 用 `autostart.state.json`（上次成功设置的方向，核心与提权进程两处都写）兜底，界面注明「读不到 / 取自上次结果」。
+      **连带影响**：助手启动时按 `autostart.enabled` 同步 `HKCU\...\Run` 登录项，读不到 → 恒 false → **登录项被删**，
+      表现成「开机核心起来了、登录后没托盘」。现在 `task_readable=false` 且 `enabled=false` 时不再动登录项
+      （显式开关操作仍走自己的 `sync_logon_entry` 路径）；`sync_logon_entry` 幂等，下次启动会自愈。
+- [ ] **观察项**：`schtasks /create` 生成的默认设置有 `DisallowStartIfOnBatteries=true`，
+      笔记本用电池开机会不拉起核心（本机台式机无影响）。要支持笔记本得改用 XML 创建并显式关掉电池限制。
 - [ ] **[环境] 零登录会话**：注销后 SYSTEM 核心仍在服务（`healthz` 可达）
 - [ ] **[环境] 顶班**：自启开启但 SYSTEM 核心没起来时，Wake 拉起 `--stand-in` 并打降级标记
 - [ ] **[环境] 安装器**：跑 `Threadline_0.1.0_x64-setup.exe` 实装、验证三 exe 同目录、卸载无残留
@@ -213,9 +229,15 @@
   - 2026-10-19：开机自启 = 一个开关（运行期可切，切开关不停正在跑的服务）；停止服务 = 现在退出且不影响自启；Wake 在核心缺失时拉起用户身份 Core（自启已开却起不来 → `stand_in_core`）。
   - 2026-10-19：v1 仅 `-L`；凭据 = 使用者填写的私钥内容/密码，machine-scope DPAPI，不读 `~\.ssh`。
   - 2026-10-19：方法论版本戳 CAW `41f698a` / 工作区 `f78fd6e` / MSO `5c432f9`。
-  - 2026-11-12：**域名访问**（用户提出、参考 joyshare）——定为「hosts + 一域名一回环 IP」，
+  - 2026-11-12：**域名访问**（用户提出、参考 joyshare）——定为「hosts + 域名回环 IP 池」，
     不做 HTTP 正向代理、不做 SNI 分流、不做 MITM；hosts 写入需 UAC 提权，保存成功即视为成功、
     提权失败留横幅。设计见 `docs/plans/2026-11-12-domain-access-design.md`。
+  - 2026-11-17：**域名共享**——同一个域名允许多条转发共用（`git.zly.m` 的 443 网页 + 22 SSH），
+    唯一性只看 `(domain_host, local_port)`；hosts 一条域名一条映射，不再因域名重复而拒绝。
+    设计文档新增 §4.5，原「一域名一个回环 IP」的独占语义作废。
+  - 2026-11-17：**自启状态可读性**——「开机自启无效」的真因是**读不到**而不是没设置：用户身份的核心查询
+    SYSTEM 任务被拒，代码把拒绝当成「不存在」。定为「查询失败要分找不到/读不到 + 读不到时用上次设置方向兜底」，
+    不做「给任务加 SDDL 让普通用户可读」（要动 Win32 安全描述符，收益不如缓存方案）。
   - 2026-11-16：**服务器管理**（用户提出）——隧道卡片给一个「管理」入口，点进去是独立管理页；
     先做只读概览（系统/CPU/内存/负载/磁盘/流量/磁盘 IO/进程/容器），终端 / 文件 / 防火墙 / 网络 /
     服务等模块只留位置（核心给清单标 `planned`），写操作类模块逐个另立契约。

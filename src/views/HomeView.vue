@@ -519,6 +519,28 @@ const forwardForm = ref<ForwardForm>(emptyForward());
 /** 填了域名就不再由用户决定绑定地址：后端会分配 127.0.0.2–254。 */
 const usesDomain = computed(() => forwardForm.value.domain.trim() !== '');
 
+/** 归一化域名用于比较（与后端 `validate_domain` 同口径：去空格、小写、去末尾点）。 */
+function normalizeDomain(raw: string): string {
+  return raw.trim().toLowerCase().replace(/\.$/, '');
+}
+
+/**
+ * 同一个域名的其它转发。
+ *
+ * 域名不是独占的：`git.zly.m` 的 443 走网页、22 走 SSH 是合法配置，它们共用同一个
+ * 回环地址，所以唯一要避开的是**端口**。表单在这里把已占端口挑出来提示。
+ */
+const domainSiblings = computed(() => {
+  const domain = normalizeDomain(forwardForm.value.domain);
+  if (!domain) {
+    return [];
+  }
+  const selfId = forwardForm.value.id;
+  return forwards.items.filter(
+    (item) => item.definition.id !== selfId && normalizeDomain(item.definition.domain ?? '') === domain,
+  );
+});
+
 /** 表单里「分组」的建议项：从现有转发里收，允许直接输入新分组（个人数据不进代码）。 */
 const groupOptions = computed(() => {
   const seen = new Set<string>();
@@ -1371,6 +1393,13 @@ function tunnelDot(row: { server: { id: string } }): string {
             留空就只用本机地址访问，与以前完全一致；填了才额外分配域名入口（127.0.0.2–254），
             本机 hosts 会把域名指到这条转发，首次写入需要一次 UAC 授权。
           </p>
+          <p v-if="domainSiblings.length" class="hint" style="width: 100%">
+            {{ forwardForm.domain.trim() }} 已由「{{
+              domainSiblings.map((item) => item.definition.name).join('、')
+            }}」使用：同域名共用同一个回环地址，靠端口区分（已占 {{
+              domainSiblings.map((item) => item.definition.local_port).join('、')
+            }}），本条请换一个端口（例如网页 443、SSH 22）。
+          </p>
         </el-form-item>
         <el-form-item label="协议">
           <div style="display: flex; gap: 8px; width: 100%; align-items: center">
@@ -1418,10 +1447,16 @@ function tunnelDot(row: { server: { id: string } }): string {
           </el-input>
         </el-form-item>
         <el-form-item label="本地">
-          <div style="display: flex; gap: 8px; width: 100%">
-            <span v-if="usesDomain" class="hint" style="flex: 1; line-height: 32px">
-              保存后自动分配（127.0.0.2–254）
-            </span>
+          <div style="display: flex; gap: 8px; width: 100%; align-items: center">
+            <!-- 域名模式下地址由核心分配：这里必须是固定高度的输入框，
+                 不能放一行会换行的提示文字（flex 行会被撑高，端口输入框跟着被拉伸）。 -->
+            <el-input
+              v-if="usesDomain"
+              model-value=""
+              placeholder="保存后自动分配（与同名域名共用）"
+              readonly
+              style="flex: 1"
+            />
             <el-input v-else v-model="forwardForm.local_host" style="flex: 1" />
             <el-input-number
               v-model="forwardForm.local_port"
@@ -1437,6 +1472,10 @@ function tunnelDot(row: { server: { id: string } }): string {
           </div>
           <p class="hint" style="width: 100%">
             域名入口用的就是这个端口：HTTPS 填 443、HTTP 填 80，浏览器里才不用带端口。
+            <template v-if="usesDomain">
+              域名入口是 127.0.0.2–254 里的一个回环地址，<strong>同域名的多条转发共用同一个地址</strong>，
+              靠端口区分（例如网页 443、SSH 22）。
+            </template>
           </p>
         </el-form-item>
         <el-form-item label="远端">

@@ -67,6 +67,9 @@ impl HostsSyncService {
     }
 
     /// 当前配置里所有「有域名」的条目（按域名排序，保证渲染稳定）。
+    ///
+    /// 同一个域名可以有多条转发（网页 443 + SSH 22 共用 `git.zly.m`），
+    /// 它们本来就落在同一个回环地址上，hosts 只该有一条映射。
     pub fn entries(&self) -> Result<Vec<ManagedHostEntry>> {
         let mut items: Vec<ManagedHostEntry> = self
             .tunnels
@@ -82,6 +85,7 @@ impl HostsSyncService {
             .filter(|entry| !entry.address.is_empty())
             .collect();
         items.sort_by(|a, b| a.domain.cmp(&b.domain));
+        items.dedup_by(|a, b| a.domain == b.domain);
         Ok(items)
     }
 
