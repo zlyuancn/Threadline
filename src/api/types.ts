@@ -634,6 +634,104 @@ export interface ContainerSummary {
   items: ContainerRow[];
 }
 
+// ── 容器管理（管理页模块）────────────────────────────────────────
+// 与上面的 ContainerSummary 分开：那是概览卡片用的 5 个字段，
+// 这里要端口、卷、网络、资源与创建时间。
+
+export interface ContainerPort {
+  host_ip: string;
+  host_port: number;
+  container_port: number;
+  proto: string;
+}
+
+export interface ContainerMount {
+  /** 宿主路径；匿名卷时是卷名。 */
+  source: string;
+  destination: string;
+  mode: string;
+}
+
+export interface ContainerNetwork {
+  name: string;
+  ip: string;
+}
+
+export interface ContainerItem {
+  id: string;
+  name: string;
+  image: string;
+  state: string;
+  status: string;
+  health?: string;
+  compose_project?: string;
+  created_at: string;
+  exit_code?: number;
+  restarts: number;
+  ports: ContainerPort[];
+  mounts: ContainerMount[];
+  networks: ContainerNetwork[];
+  cpu_percent: number;
+  mem_bytes: number;
+  mem_limit_bytes: number;
+  /** 累计收发字节（docker stats 给的是累计值，不是速率）。 */
+  net_rx_bytes: number;
+  net_tx_bytes: number;
+}
+
+export interface ContainerList {
+  engine?: string;
+  total: number;
+  running: number;
+  exited: number;
+  paused: number;
+  restarting: number;
+  items: ContainerItem[];
+  collected_at: string;
+  elapsed_ms: number;
+  degraded: string[];
+}
+
+/** 资源档（3s）：单独一条接口，不混进列表。 */
+export interface ContainerStats {
+  id: string;
+  cpu_percent: number;
+  mem_bytes: number;
+  mem_limit_bytes: number;
+  net_rx_bytes: number;
+  net_tx_bytes: number;
+}
+
+export interface ContainerDetail {
+  item: ContainerItem;
+  command: string;
+  restart_policy: string;
+  env: ContainerEnv[];
+}
+
+export interface ContainerEnv {
+  key: string;
+  /** 敏感键已由核心打码。 */
+  value: string;
+  masked: boolean;
+}
+
+export interface ContainerLogs {
+  lines: string[];
+  truncated: boolean;
+  next_since: string;
+}
+
+/** 只有启动 / 停止 / 重启。不做 pause：cgroup 冻结对在线服务是「挂起等超时」，比 stop 更难排查。 */
+export type ContainerAction = 'start' | 'stop' | 'restart';
+
+export interface ContainerActionResult {
+  ok: boolean;
+  message: string;
+  state: string;
+  image_removed: boolean;
+}
+
 export interface ServerOverview {
   collected_at: string;
   elapsed_ms: number;

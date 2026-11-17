@@ -83,6 +83,10 @@ impl From<anyhow::Error> for ApiFailure {
             || message.contains("已被")
             || message.contains("占用")
             || message.contains("无法")
+            // 「状态不允许这个动作」「容器正在运行，不能直接删」都是**用户操作
+            // 与当前状态冲突**，属于 409；报成 500 会让界面以为核心出了故障。
+            || message.contains("不允许")
+            || message.contains("正在运行")
         {
             StatusCode::CONFLICT
         } else {

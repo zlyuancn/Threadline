@@ -10,14 +10,17 @@ pub mod error;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::Response;
 use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tl_protocol::{
-    AcceptHostKeyRequest, AppGroupList, AutostartStatus, CreateCredentialRequest,
+    AcceptHostKeyRequest, AppGroupList, AutostartStatus, ContainerAction, ContainerActionResult,
+    ContainerDetail, ContainerList, ContainerLogs, ContainerStats, CreateCredentialRequest,
     CreateServerRequest, CreateTunnelRequest, CredentialList, CredentialSummary,
     DeleteAppGroupRequest, GatewayCaStatus, GatewayTrustResult, HealthResponse, HostKeyView,
     HostsStatus, HostsSyncResult, LogsResponse, PatchCredentialRequest, PatchServerRequest,
@@ -30,6 +33,8 @@ use tl_protocol::{
 use crate::business::Services;
 use crate::foundation::{registry, token as token_gen};
 use crate::models::runtime::AutostartError;
+use crate::models::server_admin::ConsoleMode;
+use crate::models::tunnel::engine::{PtyCommand, PtyEvent};
 
 use error::ApiFailure;
 
@@ -141,6 +146,33 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             &format!("{API_PREFIX}/servers/{{id}}/admin/overview"),
             get(server_admin_overview),
+        )
+        // 容器管理：列表 / 资源 / 详情 / 日志 / 动作 / 删除。
+        // `/stats` 是静态段，注册在 `{cid}` 之前（axum 静态优先，不依赖顺序，但读起来明确）。
+        .route(
+            &format!("{API_PREFIX}/servers/{{id}}/admin/containers"),
+            get(server_containers),
+        )
+        .route(
+            &format!("{API_PREFIX}/servers/{{id}}/admin/containers/stats"),
+            get(server_container_stats),
+        )
+        .route(
+            &format!("{API_PREFIX}/servers/{{id}}/admin/containers/{{cid}}"),
+            get(server_container_detail).delete(server_container_remove),
+        )
+        .route(
+            &format!("{API_PREFIX}/servers/{{id}}/admin/containers/{{cid}}/logs"),
+            get(server_container_logs),
+        )
+        .route(
+            &format!("{API_PREFIX}/servers/{{id}}/admin/containers/{{cid}}/action"),
+            post(server_container_action),
+        )
+        // 控制台：WebSocket。PTY 是双向的，请求-响应装不下。
+        .route(
+            &format!("{API_PREFIX}/servers/{{id}}/admin/containers/{{cid}}/console"),
+            get(server_container_console),
         )
         // 放在顶层而不是 /servers 下：`/servers/{id}` 是动态段，同层级再加一个
         // 静态段会被它抢走（表现为 405 Method Not Allowed）。
@@ -415,6 +447,276 @@ async fn server_admin_overview(
 struct OverviewQuery {
     #[serde(default)]
     probe: Option<String>,
+}
+
+// ── 容器管理 ──────────────────────────────────────────────
+
+async fn server_containers(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<ContainerList>, ApiFailure> {
+    Ok(Json(state.services.containers(&id).await?))
+}
+
+async fn server_container_stats(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Vec<ContainerStats>>, ApiFailure> {
+    Ok(Json(state.services.container_stats(&id).await?))
+}
+
+async fn server_container_detail(
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, cid)): AxumPath<(String, String)>,
+) -> Result<Json<ContainerDetail>, ApiFailure> {
+    Ok(Json(state.services.container_detail(&id, &cid).await?))
+}
+
+/// 日志查询参数：`tail` 有上限（核心截断到 1000），`since` 只放行时间戳字符。
+#[derive(Debug, Default, Deserialize)]
+struct ContainerLogsQuery {
+    #[serde(default)]
+    tail: Option<usize>,
+    #[serde(default)]
+    since: Option<String>,
+}
+
+async fn server_container_logs(
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, cid)): AxumPath<(String, String)>,
+    Query(query): Query<ContainerLogsQuery>,
+) -> Result<Json<ContainerLogs>, ApiFailure> {
+    let tail = query.tail.unwrap_or(200);
+    let logs = state
+        .services
+        .container_logs(&id, &cid, tail, query.since.as_deref())
+        .await?;
+    Ok(Json(logs))
+}
+
+#[derive(Debug, Deserialize)]
+struct ContainerActionRequest {
+    action: String,
+}
+
+/// 动作字符串 → 枚举。**不把前端传的字符串拼进命令**。
+///
+/// 只有启动 / 停止 / 重启。`pause` / `unpause` 会落到 `other` 分支被拒——
+/// 本产品不做暂停（cgroup 冻结对在线服务是「挂起等超时」，比 stop 更难排查）。
+fn parse_action(raw: &str) -> Result<ContainerAction, ApiFailure> {
+    match raw {
+        "start" => Ok(ContainerAction::Start),
+        "stop" => Ok(ContainerAction::Stop),
+        "restart" => Ok(ContainerAction::Restart),
+        other => Err(ApiFailure::bad_request(
+            "invalid_action",
+            format!("不支持的操作：{other}"),
+        )),
+    }
+}
+
+async fn server_container_action(
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, cid)): AxumPath<(String, String)>,
+    Json(req): Json<ContainerActionRequest>,
+) -> Result<Json<ContainerActionResult>, ApiFailure> {
+    let action = parse_action(&req.action)?;
+    Ok(Json(
+        state.services.container_action(&id, &cid, action).await?,
+    ))
+}
+
+/// 删除参数：`force=1` 处理运行中的容器，`image=1` 连镜像一起删。
+#[derive(Debug, Default, Deserialize)]
+struct ContainerRemoveQuery {
+    #[serde(default)]
+    force: Option<String>,
+    #[serde(default)]
+    image: Option<String>,
+}
+
+fn flag(raw: Option<&str>) -> bool {
+    matches!(raw, Some("1") | Some("true"))
+}
+
+async fn server_container_remove(
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, cid)): AxumPath<(String, String)>,
+    Query(query): Query<ContainerRemoveQuery>,
+) -> Result<Json<ContainerActionResult>, ApiFailure> {
+    let result = state
+        .services
+        .container_remove(
+            &id,
+            &cid,
+            flag(query.force.as_deref()),
+            flag(query.image.as_deref()),
+        )
+        .await?;
+    Ok(Json(result))
+}
+
+// ── 控制台（WebSocket + PTY） ──────────────────────────────
+//
+// 帧协议（服务端 → 客户端）：
+//   Text   `{"type":"hello","command":"docker exec …","mode":"exec"}`
+//   Binary PTY 原始输出字节（不 base64：终端流里多字节字符会被切在包边界上）
+//   Text   `{"type":"exit","code":0}` / `{"type":"error","message":"…"}`
+// 客户端 → 服务端：
+//   Text   `{"type":"input","data":"ls\n"}` / `{"type":"resize","cols":100,"rows":30}` / `{"type":"close"}`
+//   Binary 也当作输入处理（个别前端更愿意直接发字节）
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum ServerFrame<'a> {
+    Hello { command: &'a str, mode: &'a str },
+    Exit { code: u32 },
+    Error { message: &'a str },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum ClientFrame {
+    Input { data: String },
+    Resize { cols: u32, rows: u32 },
+    Close,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ConsoleQuery {
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    cols: Option<u32>,
+    #[serde(default)]
+    rows: Option<u32>,
+}
+
+/// 终端尺寸的允许区间：0 或者几万的列数会让远端 PTY 直接错乱。
+fn clamp_cols(value: u32) -> u32 {
+    value.clamp(20, 400)
+}
+
+fn clamp_rows(value: u32) -> u32 {
+    value.clamp(5, 200)
+}
+
+async fn send_frame(socket: &mut WebSocket, frame: &ServerFrame<'_>) -> Result<(), ()> {
+    let text = serde_json::to_string(frame).map_err(|_| ())?;
+    socket
+        .send(Message::Text(text.into()))
+        .await
+        .map_err(|_| ())
+}
+
+async fn server_container_console(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, cid)): AxumPath<(String, String)>,
+    Query(query): Query<ConsoleQuery>,
+) -> Result<Response, ApiFailure> {
+    // 档位是枚举不是命令串：`mode` 解析不出来直接 400，不猜。
+    let mode = ConsoleMode::parse(query.mode.as_deref().unwrap_or("exec")).ok_or_else(|| {
+        ApiFailure::bad_request("invalid_mode", "控制台方式只支持 exec / root / debug")
+    })?;
+    let cols = clamp_cols(query.cols.unwrap_or(100));
+    let rows = clamp_rows(query.rows.unwrap_or(30));
+
+    Ok(ws.on_upgrade(move |socket| console_loop(socket, state, id, cid, mode, cols, rows)))
+}
+
+async fn console_loop(
+    mut socket: WebSocket,
+    state: Arc<AppState>,
+    server_id: String,
+    cid: String,
+    mode: ConsoleMode,
+    cols: u32,
+    rows: u32,
+) {
+    // 容器不存在 / 没在运行 / 已有会话：这时已经升级成 WS 了，只能用错误帧说清楚。
+    let opened = state
+        .services
+        .container_console(&server_id, &cid, mode, cols, rows)
+        .await;
+
+    let (pty, command, _guard) = match opened {
+        Ok(parts) => parts,
+        Err(error) => {
+            let message = format!("{error:#}");
+            let _ = send_frame(&mut socket, &ServerFrame::Error { message: &message }).await;
+            let _ = socket.send(Message::Close(None)).await;
+            return;
+        }
+    };
+
+    let hello = ServerFrame::Hello {
+        command: &command,
+        mode: mode.as_str(),
+    };
+    if send_frame(&mut socket, &hello).await.is_err() {
+        return;
+    }
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
+    let pump = tokio::spawn(pty.run(command_rx, event_tx));
+
+    loop {
+        tokio::select! {
+            event = event_rx.recv() => {
+                match event {
+                    Some(PtyEvent::Data(bytes)) => {
+                        if socket.send(Message::Binary(bytes.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(PtyEvent::Exit(code)) => {
+                        let _ = send_frame(&mut socket, &ServerFrame::Exit { code }).await;
+                        break;
+                    }
+                    // 对端关了：不再发 exit，前端从连接关闭就能看出会话结束
+                    Some(PtyEvent::Closed) | None => break,
+                }
+            }
+            incoming = socket.recv() => {
+                match incoming {
+                    Some(Ok(Message::Text(text))) => {
+                        match serde_json::from_str::<ClientFrame>(&text) {
+                            Ok(ClientFrame::Input { data }) => {
+                                if command_tx.send(PtyCommand::Write(data.into_bytes())).is_err() {
+                                    break;
+                                }
+                            }
+                            Ok(ClientFrame::Resize { cols, rows }) => {
+                                let _ = command_tx.send(PtyCommand::Resize {
+                                    cols: clamp_cols(cols),
+                                    rows: clamp_rows(rows),
+                                });
+                            }
+                            Ok(ClientFrame::Close) => break,
+                            // 不认识的控制帧忽略即可，没必要因此踢掉整条会话
+                            Err(_) => {}
+                        }
+                    }
+                    Some(Ok(Message::Binary(bytes))) => {
+                        if command_tx.send(PtyCommand::Write(bytes.to_vec())).is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) => break,
+                }
+            }
+        }
+    }
+
+    // 丢掉指令端：PTY 任务收到 None 会自己 eof + close 远端 shell。
+    // 光断 WS 不会让远端的 `docker exec` 退出——它会一直挂在那个 PTY 上。
+    drop(command_tx);
+    let _ = pump.await;
+    let _ = socket.send(Message::Close(None)).await;
 }
 
 /// 保存前试连：拿请求里的表单值探一次，不落库。
@@ -975,6 +1277,59 @@ pub fn new_token() -> String {
 mod tests {
     use super::*;
 
+    /// 控制台帧的 JSON 形态：前端照这个实现，字段名/大小写变了就是破坏契约。
+    #[test]
+    fn console_frames_have_stable_shape() {
+        let hello = ServerFrame::Hello {
+            command: "docker exec -it web sh",
+            mode: "exec",
+        };
+        assert_eq!(
+            serde_json::to_string(&hello).expect("编码"),
+            r#"{"type":"hello","command":"docker exec -it web sh","mode":"exec"}"#
+        );
+
+        let input: ClientFrame =
+            serde_json::from_str(r#"{"type":"input","data":"ls\n"}"#).expect("解码 input");
+        match input {
+            ClientFrame::Input { data } => assert_eq!(data, "ls\n"),
+            other => panic!("应为 input：{other:?}"),
+        }
+
+        let resize: ClientFrame =
+            serde_json::from_str(r#"{"type":"resize","cols":120,"rows":40}"#).expect("解码 resize");
+        match resize {
+            ClientFrame::Resize { cols, rows } => {
+                assert_eq!((cols, rows), (120, 40));
+            }
+            other => panic!("应为 resize：{other:?}"),
+        }
+
+        assert!(serde_json::from_str::<ClientFrame>(r#"{"type":"bogus"}"#).is_err());
+    }
+
+    /// 终端尺寸不能原样透给远端：0 或几万的列数会让 PTY 排版错乱。
+    #[test]
+    fn terminal_size_is_clamped() {
+        assert_eq!(clamp_cols(0), 20);
+        assert_eq!(clamp_cols(10_000), 400);
+        assert_eq!(clamp_rows(1), 5);
+        assert_eq!(clamp_rows(999), 200);
+    }
+
+    /// 本产品只做启动 / 停止 / 重启。`pause` 必须在解析阶段就被拒——
+    /// 它是 cgroup 冻结，对在线服务表现为「调用方无限挂起」，比 stop 更难排查。
+    #[test]
+    fn parse_action_accepts_only_start_stop_restart() {
+        assert!(parse_action("start").is_ok());
+        assert!(parse_action("stop").is_ok());
+        assert!(parse_action("restart").is_ok());
+
+        for rejected in ["pause", "unpause", "kill", "exec", "rm", ""] {
+            assert!(parse_action(rejected).is_err(), "{rejected} 不该被接受");
+        }
+    }
+
     /// 最小可用的 AppState（临时目录，不触碰真实数据）。
     fn test_app() -> Router {
         let dir = std::env::temp_dir().join(format!("threadline-cors-{}", std::process::id()));
@@ -1215,5 +1570,41 @@ mod tests {
     fn token_is_non_empty() {
         assert!(!new_token().is_empty());
         assert_ne!(new_token(), new_token());
+    }
+
+    /// 控制台的鉴权：没令牌 401；用 query 令牌能过鉴权这一关
+    /// （之后的 400 是「不是 WS 升级」，说明已经进到处理器里了）。
+    #[tokio::test]
+    async fn console_route_accepts_query_token_only_with_token() {
+        use tower::ServiceExt;
+
+        let app = test_app();
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/servers/s1/admin/containers/web/console?mode=exec")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("call");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/servers/s1/admin/containers/web/console?mode=exec&token=token")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("call");
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "过了鉴权后应当由 WS 提取器报「不是升级请求」"
+        );
     }
 }

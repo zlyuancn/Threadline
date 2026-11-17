@@ -10,11 +10,18 @@
 //! - **不假装能用**：未实现模块在清单里标 `Planned`，界面据此显示"规划中"。
 
 pub mod collect;
+pub mod containers;
 pub mod parse;
 
 use tl_protocol::{AdminModule, AdminModuleState, ContainerSummary};
 
 pub use collect::{Probe, EXEC_BUDGET};
+pub use containers::{
+    action_script, action_verb, allowed_actions, console_command, detail_script,
+    image_users_script, list_script, logs_script, merge_inspect, merge_stats, parse_detail,
+    parse_image_users, parse_list, parse_logs, parse_stats, remove_script, resolve_cid, rmi_script,
+    stats_script, validate_cid, ConsoleMode, ACTION_BUDGET, STATS_BUDGET,
+};
 pub use parse::{interpret, interpret_with, split_sections, Extras, ParsedOverview};
 
 /// 概览采集脚本（一次往返）。
@@ -50,19 +57,27 @@ pub fn modules(containers: &ContainerSummary) -> Vec<AdminModule> {
             AdminModuleState::Planned,
             "全量进程、按 CPU/内存排序、结束进程",
         ),
+        // 容器模块已实现：有引擎就是 Ready，没引擎仍是 Unavailable（不是"规划中"）。
         module(
             "containers",
             "容器管理",
             if containers.engine.is_some() {
-                AdminModuleState::Planned
+                AdminModuleState::Ready
             } else {
                 AdminModuleState::Unavailable
             },
             if containers.engine.is_some() {
-                "容器的启停、日志、进入容器"
+                "容器列表、日志、启停与进入容器"
             } else {
-                "未检测到 docker / podman"
+                "未检测到 docker"
             },
+        ),
+        // 虚拟机：位置留好，核心尚未实现（P4），侧边栏紧跟在容器下面。
+        module(
+            "vms",
+            "虚拟机",
+            AdminModuleState::Planned,
+            "virsh 列表、启停与串口控制台（后续开发）",
         ),
         module(
             "files",
@@ -129,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn containers_with_engine_are_planned_not_unavailable() {
+    fn containers_with_engine_are_ready() {
         let summary = ContainerSummary {
             engine: Some("docker".to_string()),
             ..Default::default()
@@ -139,7 +154,20 @@ mod tests {
             .iter()
             .find(|m| m.id == "containers")
             .expect("containers");
-        assert_eq!(containers.state, AdminModuleState::Planned);
+        assert_eq!(containers.state, AdminModuleState::Ready);
+    }
+
+    #[test]
+    fn vms_are_planned_and_follow_containers() {
+        let summary = ContainerSummary {
+            engine: Some("docker".to_string()),
+            ..Default::default()
+        };
+        let modules = modules(&summary);
+        let at = |id: &str| modules.iter().position(|m| m.id == id).expect(id);
+        assert_eq!(modules[at("vms")].state, AdminModuleState::Planned);
+        // 侧边栏顺序：虚拟机紧跟在容器管理后面
+        assert_eq!(at("vms"), at("containers") + 1);
     }
 
     #[test]

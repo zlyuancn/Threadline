@@ -991,6 +991,189 @@ pub struct ContainerRow {
     pub status: String,
 }
 
+// ─────────────────────── 容器管理（管理页模块） ───────────────────────
+//
+// 与上面的 `ContainerSummary` / `ContainerRow` 分开：那两个是**概览卡片**用的，
+// 只要 5 个字段；管理页要端口、卷、网络、资源与创建时间，塞进同一个结构会让
+// 概览每秒白白多传几十个字段。
+
+/// 列表里的一行。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ContainerItem {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub image: String,
+    /// `running` / `exited` / `paused` / `restarting` / `created`。
+    #[serde(default)]
+    pub state: String,
+    /// `Up 3 days (healthy)` / `Exited (1) 4 hours ago`。
+    #[serde(default)]
+    pub status: String,
+    /// `healthy` / `unhealthy`；没有健康检查时是 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compose_project: Option<String>,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub restarts: u32,
+    #[serde(default)]
+    pub ports: Vec<ContainerPort>,
+    #[serde(default)]
+    pub mounts: Vec<ContainerMount>,
+    #[serde(default)]
+    pub networks: Vec<ContainerNetwork>,
+    /// 以下各项只在带 `stats` 的那一档里出现；没采到就是 0。
+    #[serde(default)]
+    pub cpu_percent: f64,
+    #[serde(default)]
+    pub mem_bytes: u64,
+    #[serde(default)]
+    pub mem_limit_bytes: u64,
+    /// 累计收发字节。`docker stats` 给的是累计值而不是速率；
+    /// 要算速率得在模型里缓存上一拍，而本模型是**无状态**的，所以照实传累计。
+    #[serde(default)]
+    pub net_rx_bytes: u64,
+    #[serde(default)]
+    pub net_tx_bytes: u64,
+}
+
+/// 一条端口映射。
+///
+/// `host_ip` 是必填而不是可选：`0.0.0.0` 与 `127.0.0.1` 决定这个端口是否对局域网开放，
+/// 只留端口号的话界面上看不出访问边界。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerPort {
+    pub host_ip: String,
+    pub host_port: u16,
+    pub container_port: u16,
+    /// `tcp` / `udp`。
+    #[serde(default)]
+    pub proto: String,
+}
+
+/// 一条卷映射。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerMount {
+    /// 宿主路径；匿名卷时这里是卷名（不是路径），界面据此标注。
+    pub source: String,
+    pub destination: String,
+    /// `rw` / `ro`。
+    #[serde(default)]
+    pub mode: String,
+}
+
+/// 容器在某张网络里的地址。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerNetwork {
+    pub name: String,
+    pub ip: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ContainerList {
+    /// `docker`；`None` = 这台机器上没有容器引擎。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    #[serde(default)]
+    pub total: usize,
+    #[serde(default)]
+    pub running: usize,
+    #[serde(default)]
+    pub exited: usize,
+    #[serde(default)]
+    pub paused: usize,
+    #[serde(default)]
+    pub restarting: usize,
+    #[serde(default)]
+    pub items: Vec<ContainerItem>,
+    #[serde(default)]
+    pub collected_at: String,
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    /// 采集失败的块，例如 `网络与卷`。
+    #[serde(default)]
+    pub degraded: Vec<String>,
+}
+
+/// 资源那一档（3s）单独回，不混进列表：`stats --no-stream` 自带 1–2s 采样窗口，
+/// 塞进 5s 的列表请求里会把列表拖成 3s 一次。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ContainerStats {
+    pub id: String,
+    #[serde(default)]
+    pub cpu_percent: f64,
+    #[serde(default)]
+    pub mem_bytes: u64,
+    #[serde(default)]
+    pub mem_limit_bytes: u64,
+    #[serde(default)]
+    pub net_rx_bytes: u64,
+    #[serde(default)]
+    pub net_tx_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ContainerDetail {
+    pub item: ContainerItem,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub restart_policy: String,
+    #[serde(default)]
+    pub env: Vec<ContainerEnv>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerEnv {
+    pub key: String,
+    /// 敏感键（`PASSWORD` / `SECRET` / `TOKEN` / `KEY`）由核心打码，前端拿不到明文。
+    pub value: String,
+    #[serde(default)]
+    pub masked: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ContainerLogs {
+    pub lines: Vec<String>,
+    /// 超过 `tail` 上限时为真，界面据此提示「只显示最后 N 行」。
+    #[serde(default)]
+    pub truncated: bool,
+    /// rfc3339，跟随用。
+    #[serde(default)]
+    pub next_since: String,
+}
+
+/// 写操作白名单。**枚举而不是任意字符串**：命令拼装只认这几个值。
+///
+/// 只有启动 / 停止 / 重启。`pause` 不做：它是 cgroup 冻结，进程还活着、连接还在，
+/// 表现为「调用方无限挂起」而不是快速失败——对在线服务（redis、mariadb 这类）
+/// 比 stop 更难排查，也没有实际用得上的场景。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ContainerAction {
+    Start,
+    Stop,
+    Restart,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ContainerActionResult {
+    pub ok: bool,
+    #[serde(default)]
+    pub message: String,
+    /// 动作后回读到的状态；不拿命令退出码当成功依据。
+    #[serde(default)]
+    pub state: String,
+    /// 删容器时勾了「同时删镜像」才有值：镜像是否真的删掉。
+    #[serde(default)]
+    pub image_removed: bool,
+}
+
 // ─────────────────────── 配置导入导出 ───────────────────────
 
 /// 分享包里的一条转发：是 `TunnelDto` 的**可分享子集**。

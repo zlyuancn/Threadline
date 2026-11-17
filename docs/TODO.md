@@ -29,6 +29,21 @@
 - [ ] **[环境]** 首次连接的主机密钥确认（T-12）
 - [ ] **[环境]** 指纹不匹配拒绝（T-13）
 
+### 待开工（设计已定，按计划推进）
+
+- [~] **容器管理**（引擎只认 docker）。设计 `docs/plans/2026-11-17-container-admin-design.md`，
+  计划 `docs/plans/2026-11-17-container-admin-plan.md`，原型 `tmp/misc/container-admin-prototype.html`。
+  - [x] P3a 只读：列表（两档密度）+ 详情抽屉 + 日志跟随 + 资源档
+  - [x] P3b 生命周期 + 删除（行内「⋯」菜单、可选删镜像、回执）
+  - [x] P3c 控制台：`engine::open_pty` + WebSocket 帧 + 三档 exec + xterm.js（异步 chunk，不进首屏）
+  - [x] 真机冒烟：`devb` 上全过（只读 18 / 控制台 4 / 写操作 13 / debug 档 3 / 删镜像 8），
+        写操作与 debug 都用自建 `tl-wt-*` 容器与副本镜像 tag，用户容器未动
+  - [ ] 调试图依赖本机有 `busybox`：国内直连 docker.io 会超时，需要镜像加速或手动
+        `docker pull …/busybox && docker tag … busybox:latest`；要不要在界面里给出这句提示待定
+  - [ ] `scripts/verify.sh` 的 agent 侧需先关掉运行中的 Threadline
+- [ ] **虚拟机管理**（规划，P4）。侧边栏位置在「容器管理」下面，只做 `virsh` 列表 / 生命周期 / 串口控制台；
+  创建 / 删除虚拟机、磁盘扩容、快照、迁移不做。细节见容器管理设计文档末节，届时单独出设计。
+
 ### 体验与健壮性（可自行推进）
 
 - [ ] 打开通道超时（现固定 10s）做成可配置：慢速网络下需要更长。

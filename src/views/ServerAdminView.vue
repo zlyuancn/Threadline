@@ -8,6 +8,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { onWindowFocusChange } from '../api/native';
 import RingGauge from '../components/RingGauge.vue';
 import Sparkline from '../components/Sparkline.vue';
+import ContainersPanel from './admin/ContainersPanel.vue';
 import { useServersStore } from '../models/servers';
 import {
   clockText,
@@ -687,6 +688,9 @@ const systemRows = computed(() => {
             </div>
 
           </template>
+
+          <!-- ── 容器管理 ─────────────────────────────────── -->
+          <ContainersPanel v-else-if="active === 'containers'" :server-id="serverId" />
 
           <!-- ── 未实现的模块：说清"规划中"，不给半成品按钮 ── -->
           <section v-else class="panel admin-placeholder">

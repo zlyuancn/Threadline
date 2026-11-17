@@ -16,7 +16,8 @@ repository = "https://github.com/zlyuancn/Threadline"
 
 [workspace.dependencies]
 anyhow = "1"
-axum = "0.8"
+# `ws`：容器控制台要一条双向通道（PTY 直连），HTTP 请求-响应装不下。
+axum = { version = "0.8", features = ["ws"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 base64 = "0.22"
 fs2 = "0.4"

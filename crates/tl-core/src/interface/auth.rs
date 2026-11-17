@@ -24,12 +24,37 @@ pub async fn require_token(
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
 
-    let provided = header.strip_prefix("Bearer ").unwrap_or_default();
+    let from_header = header.strip_prefix("Bearer ").unwrap_or_default();
+
+    // 浏览器不能给 WebSocket 设请求头，所以控制台那条只能用 query 带令牌。
+    // **只对 `/console` 开这个口子**：其余端点仍必须走 Authorization，
+    // 免得令牌以 query 的形式散落到各处日志里。
+    let provided = if from_header.is_empty() {
+        console_query_token(&request).unwrap_or_default()
+    } else {
+        from_header.to_string()
+    };
+
     // 空令牌一律拒绝：不依赖"装配方一定给非空 token"这条外部不变量。
     if provided.is_empty() || !constant_time_eq(provided.as_bytes(), state.token.as_bytes()) {
         return Err(ApiFailure::unauthorized());
     }
     Ok(next.run(request).await)
+}
+
+/// 从 `?token=` 取令牌，**仅限容器控制台那条路由**。
+///
+/// 不做百分号解码：核心签发的令牌是十六进制串，不含需要转义的字符；
+/// 真出现别的字符，比较自然会失败，而不是被解码成另一个令牌。
+fn console_query_token(request: &Request) -> Option<String> {
+    if !request.uri().path().ends_with("/console") {
+        return None;
+    }
+    request
+        .uri()
+        .query()?
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("token=").map(str::to_string))
 }
 
 /// 常量时间比较，避免按字节提前返回泄露前缀信息。
@@ -64,5 +89,23 @@ mod tests {
     fn empty_matches_empty_but_never_a_real_token() {
         assert!(constant_time_eq(b"", b""));
         assert!(!constant_time_eq(b"", b"token"));
+    }
+
+    fn request(uri: &str) -> axum::extract::Request {
+        axum::extract::Request::builder()
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .expect("请求可构造")
+    }
+
+    #[test]
+    fn query_token_is_accepted_for_console_only() {
+        let console =
+            request("/api/v1/servers/s1/admin/containers/web/console?mode=exec&token=abc");
+        assert_eq!(console_query_token(&console).as_deref(), Some("abc"));
+
+        // 其余路由不吃 query 令牌：令牌不该顺着 URL 散到各处日志里
+        let list = request("/api/v1/servers/s1/admin/containers?token=abc");
+        assert_eq!(console_query_token(&list), None);
     }
 }

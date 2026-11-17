@@ -824,6 +824,120 @@ pub async fn exec_capture(
         .map_err(|_| format!("远端命令在 {} 秒内没有结束", budget.as_secs()))?
 }
 
+/// PTY 上读到的一件事。
+#[derive(Debug)]
+pub enum PtyEvent {
+    Data(Vec<u8>),
+    Exit(u32),
+    Closed,
+}
+
+/// 发给 PTY 的指令。
+#[derive(Debug)]
+pub enum PtyCommand {
+    Write(Vec<u8>),
+    Resize { cols: u32, rows: u32 },
+}
+
+/// 一条交互式 PTY 通道。
+///
+/// 与 `exec_capture` 的区别：那个是「跑完收结果」，这个要**双向**——
+/// 键盘输入写进去、程序输出读出来，直到对端 `EOF`。两条路径并存：
+/// 采集脚本仍走 `exec_capture`（它没有 PTY 开销，也不会回显）。
+pub struct PtyChannel {
+    channel: russh::Channel<russh::client::Msg>,
+}
+
+impl PtyChannel {
+    /// 驱动这条 PTY，直到对端关闭或指令端断开。
+    ///
+    /// 读与写放在同一个任务里：russh 的 `Channel::wait` 要 `&mut self`，而
+    /// `data_bytes` / `window_change` 只要 `&self`，用 `select!` 把两者塞进
+    /// 同一个作用域，才能既持续收输出、又随时响应键盘与窗口变化。
+    /// 上游拿两个 mpsc 就够了，不必知道这里借用怎么摆。
+    pub async fn run(
+        mut self,
+        mut commands: tokio::sync::mpsc::UnboundedReceiver<PtyCommand>,
+        events: tokio::sync::mpsc::UnboundedSender<PtyEvent>,
+    ) {
+        loop {
+            tokio::select! {
+                message = self.channel.wait() => {
+                    let Some(message) = message else {
+                        let _ = events.send(PtyEvent::Closed);
+                        break;
+                    };
+                    match message {
+                        // PTY 下 stderr 本来就合进 stdout；个别服务端仍走扩展通道，一并收下。
+                        ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
+                            if events.send(PtyEvent::Data(data.to_vec())).is_err() {
+                                break;
+                            }
+                        }
+                        ChannelMsg::ExitStatus { exit_status } => {
+                            let _ = events.send(PtyEvent::Exit(exit_status));
+                        }
+                        ChannelMsg::Eof | ChannelMsg::Close => {
+                            let _ = events.send(PtyEvent::Closed);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                command = commands.recv() => {
+                    let Some(command) = command else {
+                        // 前端撤了：主动关掉，别在远端留一个没人管的 shell。
+                        let _ = self.channel.eof().await;
+                        let _ = self.channel.close().await;
+                        let _ = events.send(PtyEvent::Closed);
+                        break;
+                    };
+                    match command {
+                        PtyCommand::Write(bytes) => {
+                            if self.channel.data_bytes(bytes).await.is_err() {
+                                let _ = events.send(PtyEvent::Closed);
+                                break;
+                            }
+                        }
+                        // 不通知远端的话，`vim` / `htop` 会一直按 80×24 排版。
+                        PtyCommand::Resize { cols, rows } => {
+                            let _ = self.channel.window_change(cols, rows, 0, 0).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 开一条 PTY 并执行命令。
+///
+/// `term` 固定 `xterm-256color`：前端就是 xterm.js，颜色与光标键序列按这个来。
+/// 这里**不设总超时**——交互式会话本来就可能开很久，超时由前端关抽屉或断开隧道触发。
+pub async fn open_pty(
+    session: &SessionHandle,
+    command: &str,
+    cols: u32,
+    rows: u32,
+) -> Result<PtyChannel, String> {
+    let channel = session
+        .channel_open_session()
+        .await
+        .map_err(|e| format!("打开终端通道失败：{e}"))?;
+
+    channel
+        .request_pty(true, "xterm-256color", cols, rows, 0, 0, &[])
+        .await
+        .map_err(|e| format!("申请 PTY 失败：{e}"))?;
+
+    channel
+        .exec(true, command.as_bytes().to_vec())
+        .await
+        .map_err(|e| format!("下发命令失败：{e}"))?;
+
+    Ok(PtyChannel { channel })
+}
+
 async fn forward_one<S>(
     session: Arc<client::Handle<ClientHandler>>,
     (remote_host, remote_port): (String, u16),

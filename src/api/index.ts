@@ -1,11 +1,18 @@
 // 资源级 API 封装：views/models 只能从这里取数据，不直接碰 http/fetch。
 
 import { http } from './client';
+import { bootstrap } from './client';
 import type {
   AcceptHostKeyRequest,
   AppGroup,
   AppGroupList,
   AutostartStatus,
+  ContainerAction,
+  ContainerActionResult,
+  ContainerDetail,
+  ContainerList,
+  ContainerLogs,
+  ContainerStats,
   CreateCredentialRequest,
   CreateServerRequest,
   CreateTunnelRequest,
@@ -71,7 +78,72 @@ export const adminApi = {
     http.getSlow<ServerOverview>(
       `/servers/${id}/admin/overview${probe === 'full' ? '' : `?probe=${probe}`}`,
     ),
+
+  // ── 容器管理 ──────────────────────────────────────────────
+  // 列表与资源分两条：`stats --no-stream` 自带 1–2s 采样窗口，
+  // 混进列表会把 5 秒的轮询拖成 3 秒一次。
+
+  containers: (id: string) => http.getSlow<ContainerList>(`/servers/${id}/admin/containers`),
+
+  containerStats: (id: string) =>
+    http.getSlow<ContainerStats[]>(`/servers/${id}/admin/containers/stats`),
+
+  containerDetail: (id: string, cid: string) =>
+    http.getSlow<ContainerDetail>(`/servers/${id}/admin/containers/${encodeURIComponent(cid)}`),
+
+  containerLogs: (id: string, cid: string, tail = 200, since?: string) => {
+    const query = new URLSearchParams({ tail: String(tail) });
+    if (since) query.set('since', since);
+    return http.getSlow<ContainerLogs>(
+      `/servers/${id}/admin/containers/${encodeURIComponent(cid)}/logs?${query}`,
+    );
+  },
+
+  containerAction: (id: string, cid: string, action: ContainerAction) =>
+    http.post<ContainerActionResult>(
+      `/servers/${id}/admin/containers/${encodeURIComponent(cid)}/action`,
+      { action },
+    ),
+
+  containerRemove: (id: string, cid: string, force: boolean, image: boolean) => {
+    const query = new URLSearchParams({
+      force: force ? '1' : '0',
+      image: image ? '1' : '0',
+    });
+    return http.del<ContainerActionResult>(
+      `/servers/${id}/admin/containers/${encodeURIComponent(cid)}?${query}`,
+    );
+  },
+
+  /**
+   * 控制台：一条 WebSocket，服务端把 PTY 的输出直接推过来。
+   *
+   * 令牌走 query——浏览器不能给 WebSocket 设请求头。核心只对 `/console`
+   * 这条路开这个口子（见 `interface/auth.rs` 的 `console_query_token`）。
+   */
+  openConsole: (
+    id: string,
+    cid: string,
+    mode: ConsoleMode,
+    cols: number,
+    rows: number,
+  ): WebSocket => {
+    const { baseUrl, token } = bootstrap();
+    const origin = baseUrl || window.location.origin;
+    const url = new URL(
+      `${origin}/api/v1/servers/${encodeURIComponent(id)}/admin/containers/${encodeURIComponent(cid)}/console`,
+    );
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.searchParams.set('mode', mode);
+    url.searchParams.set('cols', String(cols));
+    url.searchParams.set('rows', String(rows));
+    if (token) url.searchParams.set('token', token);
+    return new WebSocket(url.toString());
+  },
 };
+
+/** 进容器的三种方式。与核心的 `ConsoleMode` 一一对应。 */
+export type ConsoleMode = 'exec' | 'root' | 'debug';
 
 export const tunnelsApi = {
   list: () => http.get<TunnelList>('/tunnels'),

@@ -1156,6 +1156,48 @@ kbd {
   white-space: nowrap;
 }
 
+/* 分段控件（容器列表的筛选与密度、控制台的模式切换）。
+ *
+ * 这个 class 之前**只出现在模板里、没有对应规则**：`<button>` 于是退化成
+ * 浏览器默认样式——白底、outset 边框、黑色系统字体，浅色主题下尤其难看，
+ * 和旁边圆角半透明的控件完全不是一套。 */
+.seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  /* 用 --card-solid 而不是 --tint：--tint 只有 6% 叠加，浅色主题下
+   * 和页面背景几乎同色（#e7ebf1 vs #f3f6f9），控件边界直接糊掉。
+   * --card-solid 是每个主题都不透明的面板色，亮暗两套都浮得起来。 */
+  background: var(--card-solid);
+}
+
+.seg button {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 130ms ease,
+    color 130ms ease;
+}
+
+.seg button:hover {
+  color: var(--text-2);
+}
+
+.seg button.is-on {
+  background: var(--tint-strong);
+  color: var(--text);
+}
+
 .btn:disabled {
   opacity: 0.45;
   cursor: default;
@@ -1181,6 +1223,15 @@ kbd {
 
 .btn.is-wide {
   width: 100%;
+}
+
+/* 小号按钮：控制台工具条里跟分段控件并排，32px 会高出一截
+ * （原先 `is-xs` 只有 class 没有规则，按钮一直按默认尺寸渲染）。 */
+.btn.is-xs {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 11.5px;
 }
 
 .icon-btn {

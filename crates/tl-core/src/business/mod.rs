@@ -130,6 +130,92 @@ impl Services {
         admin::overview(&self.servers, &self.runner, server_id, probe).await
     }
 
+    // ── 容器管理 ──────────────────────────────────────────────
+    // 只读的走 `containers` / `container_stats` / `container_detail` / `container_logs`，
+    // 写操作（动作、删除）在业务层再判一次状态与清单。
+
+    pub async fn containers(&self, server_id: &str) -> Result<tl_protocol::ContainerList> {
+        admin::containers(&self.servers, &self.runner, server_id).await
+    }
+
+    pub async fn container_stats(
+        &self,
+        server_id: &str,
+    ) -> Result<Vec<tl_protocol::ContainerStats>> {
+        admin::container_stats(&self.servers, &self.runner, server_id).await
+    }
+
+    pub async fn container_detail(
+        &self,
+        server_id: &str,
+        cid: &str,
+    ) -> Result<tl_protocol::ContainerDetail> {
+        admin::container_detail(&self.servers, &self.runner, server_id, cid).await
+    }
+
+    pub async fn container_logs(
+        &self,
+        server_id: &str,
+        cid: &str,
+        tail: usize,
+        since: Option<&str>,
+    ) -> Result<tl_protocol::ContainerLogs> {
+        admin::container_logs(&self.servers, &self.runner, server_id, cid, tail, since).await
+    }
+
+    pub async fn container_action(
+        &self,
+        server_id: &str,
+        cid: &str,
+        action: tl_protocol::ContainerAction,
+    ) -> Result<tl_protocol::ContainerActionResult> {
+        admin::container_action(&self.servers, &self.runner, server_id, cid, action).await
+    }
+
+    pub async fn container_remove(
+        &self,
+        server_id: &str,
+        cid: &str,
+        force: bool,
+        remove_image: bool,
+    ) -> Result<tl_protocol::ContainerActionResult> {
+        admin::container_remove(
+            &self.servers,
+            &self.runner,
+            server_id,
+            cid,
+            force,
+            remove_image,
+        )
+        .await
+    }
+
+    /// 开一条控制台：返回 PTY 通道、实际执行的命令，以及占用凭据
+    /// （凭据 drop 时自动解除「同一容器只能一条会话」的占用）。
+    pub async fn container_console(
+        &self,
+        server_id: &str,
+        cid: &str,
+        mode: crate::models::server_admin::ConsoleMode,
+        cols: u32,
+        rows: u32,
+    ) -> Result<(
+        crate::models::tunnel::engine::PtyChannel,
+        String,
+        admin::ConsoleGuard,
+    )> {
+        admin::container_console(
+            &self.servers,
+            &self.runner,
+            server_id,
+            cid,
+            mode,
+            cols,
+            rows,
+        )
+        .await
+    }
+
     /// 应用页分组清单（含自动收录的组与空组）。
     pub fn app_groups(&self) -> Result<AppGroupList> {
         self.tunnels.app_groups()
