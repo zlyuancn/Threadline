@@ -214,15 +214,21 @@ fn init_tracing() {
 /// 当前 Windows 身份（用于发现契约与提权判定）。
 fn current_identity() -> String {
     match std::env::var("USERNAME") {
-        Ok(user) if !user.is_empty() => {
-            // SYSTEM 账户名固定为 `SYSTEM`（本机服务上下文）。
-            if user.eq_ignore_ascii_case("SYSTEM") {
-                "SYSTEM".to_string()
-            } else {
-                format!("user:{user}")
-            }
-        }
+        Ok(user) if !user.is_empty() => classify_identity(&user),
         _ => "unknown".to_string(),
+    }
+}
+
+/// 把 `USERNAME` 折成身份标签。
+///
+/// SYSTEM 的账户名有两种来源：任务计划/SYSTEM 上下文下通常是 `SYSTEM`，但由服务控制管理器
+/// 或某些启动方式拉起时会显示成机器账户 `MYPC$`。后者也是本机服务上下文——漏判会让
+/// `privilege_required` 恒为 true，界面明明在 SYSTEM 核心上却提示「以用户身份运行，需提权」。
+fn classify_identity(user: &str) -> String {
+    if user.eq_ignore_ascii_case("SYSTEM") || user.ends_with('$') {
+        "SYSTEM".to_string()
+    } else {
+        format!("user:{user}")
     }
 }
 
@@ -262,6 +268,9 @@ fn run_autostart_once(data_dir: &Path, log_dir: &Path, enabled: bool) -> ExitCod
 
     match outcome {
         Ok(()) => {
+            // 与核心的 `set_autostart` 写同一份记录：之后核心换成用户身份在跑、
+            // 读不到 SYSTEM 任务定义时，开关仍能显示上次设置的方向。
+            let _ = tl_core::models::runtime::remember_autostart(data_dir, enabled);
             write_autostart_result(
                 data_dir,
                 AutostartResult {
@@ -724,6 +733,8 @@ fn run_hosts_sync_once(mut args: impl Iterator<Item = String>) -> u8 {
         })
         .collect();
     entries.sort();
+    // 同域名的多条转发共用一个回环地址，hosts 只能有一条映射。
+    entries.dedup_by(|a, b| a.domain == b.domain);
 
     let desired = tl_core::foundation::hosts::render(&existing, &entries);
     let result = match tl_core::foundation::hosts::write_raw(&hosts_path, &desired) {
@@ -903,6 +914,15 @@ mod tests {
         let args = parse(&[]).expect("parse");
         assert_eq!(args.run_mode, RunMode::Manual);
         assert!(args.autostart.is_none());
+    }
+
+    #[test]
+    fn machine_account_is_recognised_as_system() {
+        // 任务计划拉起时 USERNAME 可能是机器账户 `MYPC$`，不能当成普通用户。
+        assert_eq!(classify_identity("SYSTEM"), "SYSTEM");
+        assert_eq!(classify_identity("system"), "SYSTEM");
+        assert_eq!(classify_identity("MYPC$"), "SYSTEM");
+        assert_eq!(classify_identity("Administrator"), "user:Administrator");
     }
 
     #[test]

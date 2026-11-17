@@ -4,7 +4,7 @@
 //! 以及当前进程的降级集合。判定规则：能否改自启（身份是否有权）、当前是否降级。
 //! **提供**：`whoami` / `autostart_status` / `set_autostart` / `write_control` / `mark_stopped` /
 //! `degradations` / `raise` / `clear`。
-//! **允许调用**：`foundation::{store, registry, token}`、`tl_protocol`。
+//! **允许调用**：`foundation::{store, registry, token, clock}`、`tl_protocol`。
 //!
 //! 纪律（CAW I5 / AP10）：自启开关只改**注册层**，绝不停正在跑的核心；
 //! 任务计划是 per-machine 注册物，只有 SYSTEM 身份的核心（或一次性提权进程）能写。
@@ -13,11 +13,39 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use tl_protocol::{
-    AutostartStatus, ControlFile, ControlInfo, ControlStopped, Degradation, InstallInfo, RunMode,
-    WhoamiResponse,
+    AutostartIntent, AutostartStatus, ControlFile, ControlInfo, ControlStopped, Degradation,
+    InstallInfo, RunMode, WhoamiResponse,
 };
 
-use crate::foundation::{registry, store};
+use crate::foundation::{clock, registry, store};
+
+/// 上一次成功设置的开机自启方向（读不到任务定义时用它兜底显示）。
+pub const AUTOSTART_STATE_FILE: &str = "autostart.state.json";
+
+/// 把「查询结果 + 上次设置方向」折成开关三件套（`enabled` / `task_exists` / `task_enabled`）。
+///
+/// 读得到就以任务计划为准；读不到就用上次设置的方向兜底，并明确不宣称任务存在。
+fn resolve_autostart(task: registry::TaskStatus, intent: Option<bool>) -> (bool, bool, bool) {
+    if task.readable {
+        (task.exists && task.enabled, task.exists, task.enabled)
+    } else {
+        (intent.unwrap_or(false), false, false)
+    }
+}
+
+/// 记下「最后一次成功设置」的方向。
+///
+/// 用户身份的核心读不到 SYSTEM 任务，只能靠这份记录回答「开关现在是什么状态」；
+/// 提权的一次性进程（`--autostart on|off`）也走这里，两处写同一个文件。
+pub fn remember_autostart(dir: &Path, enabled: bool) -> anyhow::Result<()> {
+    store::write_json_atomic(
+        &dir.join(AUTOSTART_STATE_FILE),
+        &AutostartIntent {
+            enabled,
+            at: clock::now_iso8601(),
+        },
+    )
+}
 
 /// 改自启开关的失败原因。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,14 +167,30 @@ impl RuntimeStore {
     /// 自启开关的当前状态（只读注册层，不改任何东西）。
     ///
     /// `privilege_required` 表示**当前身份**改这个开关是否要提权：只有 SYSTEM 能直接改 per-machine 任务。
+    ///
+    /// 读不到任务定义（用户身份的核心 + SYSTEM 任务）时**不能报「不存在」**：那会让
+    /// 开关恒显示「关闭」，用户提权改完再回读还是关闭。此时改用上一次成功设置的方向，
+    /// 并把 `task_readable` 置 false，由界面如实标注。
     pub fn autostart_status(&self) -> Result<AutostartStatus, registry::RegistryError> {
         let task = registry::query(registry::TASK_NAME)?;
+        let readable = task.readable;
+        let (enabled, task_exists, task_enabled) =
+            resolve_autostart(task, self.last_autostart_intent());
         Ok(AutostartStatus {
-            enabled: task.exists && task.enabled,
-            task_exists: task.exists,
-            task_enabled: task.enabled,
+            enabled,
+            task_exists,
+            task_enabled,
+            task_readable: readable,
             privilege_required: !self.process.is_system(),
         })
+    }
+
+    /// 上一次成功设置的开机自启方向；从没设置过 → `None`。
+    fn last_autostart_intent(&self) -> Option<bool> {
+        store::read_json::<AutostartIntent>(&self.dir.join(AUTOSTART_STATE_FILE))
+            .ok()
+            .flatten()
+            .map(|intent| intent.enabled)
     }
 
     /// 改自启开关：**只动注册层，不碰正在跑的隧道**（CAW I5）。
@@ -166,6 +210,8 @@ impl RuntimeStore {
         } else {
             registry::delete(registry::TASK_NAME)?;
         }
+        // 记下方向：之后即使读不到任务定义（例如核心换成用户身份在跑），开关也能如实显示。
+        let _ = remember_autostart(&self.dir, enabled);
         Ok(self.autostart_status()?)
     }
 
@@ -294,6 +340,53 @@ mod tests {
             .expect_err("用户身份必须被拒");
         assert_eq!(err, AutostartError::PrivilegeRequired);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unreadable_task_falls_back_to_last_setting() {
+        // 用户身份的核心读不到 SYSTEM 任务：不能报「没开」，得用上次设置的方向。
+        let (enabled, exists, task_enabled) =
+            resolve_autostart(registry::TaskStatus::unreadable(), Some(true));
+        assert!(enabled, "上次设置为开启 → 开关保持开启");
+        assert!(!exists, "读不到时不得宣称任务存在");
+        assert!(!task_enabled);
+
+        assert!(!resolve_autostart(registry::TaskStatus::unreadable(), Some(false)).0);
+        assert!(!resolve_autostart(registry::TaskStatus::unreadable(), None).0);
+    }
+
+    #[test]
+    fn last_setting_is_remembered_for_unreadable_cases() {
+        let dir = temp_dir("intent");
+        remember_autostart(&dir, true).expect("写上次设置方向");
+        let store = store_in(&dir, RunMode::Manual, "user:alice");
+        assert_eq!(
+            store.last_autostart_intent(),
+            Some(true),
+            "落盘后要能读回来"
+        );
+        assert!(
+            resolve_autostart(
+                registry::TaskStatus::unreadable(),
+                store.last_autostart_intent()
+            )
+            .0,
+            "读不到任务时用它兜底"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn readable_task_wins_over_last_setting() {
+        let task = registry::TaskStatus {
+            exists: true,
+            enabled: false,
+            readable: true,
+        };
+        let (enabled, exists, task_enabled) = resolve_autostart(task, Some(true));
+        assert!(!enabled, "实测「存在但禁用」优先于上次设置");
+        assert!(exists);
+        assert!(!task_enabled);
     }
 
     #[test]

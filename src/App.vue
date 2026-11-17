@@ -200,6 +200,11 @@ watch(
     if (enabled === undefined) {
       return;
     }
+    // 读不到任务计划（用户身份的核心 + SYSTEM 任务）时，这个 false 不一定是用户的选择：
+    // 照着它删登录项，会让「开机自启开着、但登录后不进托盘」。这种情况只信显式开关操作。
+    if (!enabled && runtime.autostart?.task_readable === false) {
+      return;
+    }
     syncLogonEntry(enabled).catch(() => {
       // 登录项写不进去不该打断主流程，设置页里会再暴露一次
     });

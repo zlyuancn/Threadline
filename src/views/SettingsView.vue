@@ -622,13 +622,18 @@ async function toggle(enabled: boolean) {
         '等待管理员授权超时（可能取消了 UAC）',
       );
       await runtime.refresh();
-      if (runtime.autostart?.enabled === enabled) {
+      const status = runtime.autostart;
+      if (status?.enabled === enabled) {
         await syncLogonEntrySafe(enabled);
+        // 读不到任务定义时，这个「已开启」来自上次设置结果，得说清楚来源。
+        const source = status.task_readable ? '' : '（状态取自上次设置结果）';
         ElMessage.success(
-          enabled ? '已开启开机自启（下次开机生效）' : '已关闭开机自启（下次开机生效）',
+          enabled
+            ? `已开启开机自启（下次开机生效）${source}`
+            : `已关闭开机自启（下次开机生效）${source}`,
         );
       } else {
-        // 提权进程已成功，但核心（普通用户）可能读不到 SYSTEM 任务的定义。
+        // 提权进程已成功，但核心（普通用户）读不到 SYSTEM 任务的定义，也没有上次设置记录。
         // 不假装成功，也不报失败——如实说明。
         ElMessage.warning('提权已执行，但当前身份读不到任务计划状态；以重启后的实际行为为准');
       }
@@ -919,7 +924,15 @@ async function toggle(enabled: boolean) {
         {{ runtime.whoami?.identity ?? '—' }}
       </el-descriptions-item>
       <el-descriptions-item label="任务计划">
-        {{ runtime.autostart?.task_exists ? (runtime.autostart.task_enabled ? '存在且启用' : '存在但禁用') : '不存在' }}
+        {{
+          runtime.autostart?.task_readable === false
+            ? '读不到（当前身份不是管理员）'
+            : runtime.autostart?.task_exists
+              ? runtime.autostart.task_enabled
+                ? '存在且启用'
+                : '存在但禁用'
+              : '不存在'
+        }}
       </el-descriptions-item>
       <el-descriptions-item label="降级">
         {{ runtime.degradationLabels().join('；') || '无' }}

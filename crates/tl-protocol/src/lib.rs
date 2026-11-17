@@ -136,12 +136,25 @@ impl HealthResponse {
 /// 开机自启开关的状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutostartStatus {
-    /// 逻辑开关：任务计划存在且启用。
+    /// 逻辑开关：任务计划存在且启用。`task_readable = false` 时来自上一次设置结果。
     pub enabled: bool,
     pub task_exists: bool,
     pub task_enabled: bool,
+    /// 当前身份能否读到任务计划定义。
+    ///
+    /// 用户身份的核心读不到 SYSTEM 任务（`Access is denied`），此时 `task_exists` /
+    /// `task_enabled` 不可信、`enabled` 是上次成功设置的方向——界面必须如实说明，
+    /// 不能显示成「不存在 / 关闭」。
+    pub task_readable: bool,
     /// 当前进程身份改这个开关是否需要一次提权（用户身份 Core 改 SYSTEM 任务 → true）。
     pub privilege_required: bool,
+}
+
+/// 上一次成功设置的开机自启方向（读不到任务定义时用来兜底显示）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutostartIntent {
+    pub enabled: bool,
+    pub at: String,
 }
 
 /// `GET /whoami`。
@@ -1425,11 +1438,12 @@ mod tests {
             enabled: true,
             task_exists: true,
             task_enabled: true,
+            task_readable: true,
             privilege_required: false,
         };
         assert_eq!(
             serde_json::to_string(&st).unwrap(),
-            r#"{"enabled":true,"task_exists":true,"task_enabled":true,"privilege_required":false}"#
+            r#"{"enabled":true,"task_exists":true,"task_enabled":true,"task_readable":true,"privilege_required":false}"#
         );
 
         let result = AutostartResult {
@@ -1459,6 +1473,7 @@ mod tests {
                 enabled: true,
                 task_exists: true,
                 task_enabled: true,
+                task_readable: true,
                 privilege_required: true,
             },
         };

@@ -24,6 +24,8 @@ export interface AutostartStatus {
   enabled: boolean;
   task_exists: boolean;
   task_enabled: boolean;
+  /** 当前身份能否读到任务定义；false 时 enabled 取自上次设置结果，不是实测。 */
+  task_readable: boolean;
   privilege_required: boolean;
 }
 

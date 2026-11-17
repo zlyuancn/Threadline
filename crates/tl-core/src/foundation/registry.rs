@@ -51,6 +51,9 @@ impl std::error::Error for RegistryError {}
 pub struct TaskStatus {
     pub exists: bool,
     pub enabled: bool,
+    /// 这次查询是否真的读到了任务定义。`false` = 被拒（当前身份无权读 SYSTEM 任务），
+    /// 此时 `exists` / `enabled` 不可信——**不能**当成「任务不存在」。
+    pub readable: bool,
 }
 
 impl TaskStatus {
@@ -58,6 +61,16 @@ impl TaskStatus {
         Self {
             exists: false,
             enabled: false,
+            readable: true,
+        }
+    }
+
+    /// 查询被拒：任务是否存在无从得知。
+    pub fn unreadable() -> Self {
+        Self {
+            exists: false,
+            enabled: false,
+            readable: false,
         }
     }
 }
@@ -142,6 +155,10 @@ fn schtasks(args: &[String]) -> Result<std::process::Output, RegistryError> {
 }
 
 /// 查询任务是否存在与是否启用。
+///
+/// 失败分两类，**必须区分**：任务不存在是正常状态；`ERROR: Access is denied`
+/// 是「当前身份读不到 SYSTEM 任务」——把它当成「不存在」会让用户身份的核心
+/// 永远报告「自启关闭」，用户点开开关、提权成功后回读还是关闭，看起来就像功能坏了。
 pub fn query(task_name: &str) -> Result<TaskStatus, RegistryError> {
     let out = schtasks(&[
         "/query".into(),
@@ -151,14 +168,30 @@ pub fn query(task_name: &str) -> Result<TaskStatus, RegistryError> {
         "ONE".into(),
     ])?;
     if !out.status.success() {
-        // 任务不存在是正常状态，不是错误。
-        return Ok(TaskStatus::absent());
+        return Ok(classify_failure(&String::from_utf8_lossy(&out.stderr)));
     }
     let xml = String::from_utf8_lossy(&out.stdout);
     Ok(TaskStatus {
         exists: true,
         enabled: !xml.contains("<Enabled>false</Enabled>"),
+        readable: true,
     })
+}
+
+/// `schtasks /query` 失败时的判定。
+///
+/// 只有明确「找不到这个任务」才算不存在；`Access is denied`、未知错误一律按
+/// 「读不到」处理——宁可说「不知道」，也不能说「没开」（用户会照着这句话去排查）。
+fn classify_failure(stderr: &str) -> TaskStatus {
+    let lower = stderr.to_lowercase();
+    let missing = lower.contains("cannot find")
+        || lower.contains("找不到")
+        || lower.contains("does not exist");
+    if missing {
+        TaskStatus::absent()
+    } else {
+        TaskStatus::unreadable()
+    }
 }
 
 /// 创建（覆盖）开机自启任务：ONSTART + SYSTEM + 最高权限。
@@ -319,6 +352,27 @@ mod tests {
         let status = TaskStatus::absent();
         assert!(!status.exists);
         assert!(!status.enabled);
+        assert!(status.readable, "「查过且没有」是可读的结论");
+    }
+
+    #[test]
+    fn access_denied_is_unreadable_not_absent() {
+        // 用户身份的核心查 SYSTEM 任务：schtasks 返回 Access is denied。
+        // 这不能当成「任务不存在」，否则开关永远显示关闭。
+        let status = classify_failure("ERROR: Access is denied.\r\n");
+        assert!(!status.exists);
+        assert!(!status.readable, "被拒时必须标记为读不到");
+
+        let zh = classify_failure("错误: 拒绝访问。");
+        assert!(!zh.readable);
+    }
+
+    #[test]
+    fn missing_task_is_absent() {
+        assert!(classify_failure("ERROR: The system cannot find the file specified.").readable);
+        assert!(classify_failure("错误: 系统找不到指定的文件。").readable);
+        let absent = classify_failure("ERROR: The system cannot find the file specified.");
+        assert!(!absent.exists);
     }
 
     #[test]
