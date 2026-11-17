@@ -23,5 +23,8 @@ dist/
 # 本地构建的发布产物（不入库）
 /dist-release/
 
+# 本地临时产物（部署脚本、取证输出），不属于仓库
+/tmp/
+
 # 发布正文（release-notes.ps1 生成）
 release-body.md
