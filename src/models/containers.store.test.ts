@@ -186,6 +186,50 @@ describe('日志跟随', () => {
   });
 });
 
+describe('网络速率', () => {
+  it('derives bytes per second from two consecutive stats passes', async () => {
+    const now = vi.spyOn(Date, 'now');
+    api.containers.mockResolvedValue(list([row()]));
+
+    now.mockReturnValue(1_000);
+    api.containerStats.mockResolvedValueOnce([stat({ net_rx_bytes: 1000, net_tx_bytes: 500 })]);
+    const store = useContainersStore();
+    await store.load('s1');
+
+    // 只有一拍，差不出速率——不能拿 0 冒充「没有流量」
+    expect(store.rateFor('a1f93c2e7b10')).toBeUndefined();
+
+    now.mockReturnValue(3_000);
+    api.containerStats.mockResolvedValueOnce([stat({ net_rx_bytes: 5000, net_tx_bytes: 2500 })]);
+    await store.loadStats();
+
+    const rate = store.rateFor('a1f93c2e7b10');
+    expect(rate?.rx).toBe(2000); // (5000 - 1000) B / 2s
+    expect(rate?.tx).toBe(1000); // (2500 - 500) B / 2s
+
+    now.mockRestore();
+  });
+
+  it('treats a counter reset as zero rather than a negative rate', async () => {
+    const now = vi.spyOn(Date, 'now');
+    api.containers.mockResolvedValue(list([row()]));
+
+    now.mockReturnValue(1_000);
+    api.containerStats.mockResolvedValueOnce([stat({ net_rx_bytes: 9000, net_tx_bytes: 9000 })]);
+    const store = useContainersStore();
+    await store.load('s1');
+
+    // 容器重启后累计值回落：差值是负的，不能当成「倒流」
+    now.mockReturnValue(3_000);
+    api.containerStats.mockResolvedValueOnce([stat({ net_rx_bytes: 100, net_tx_bytes: 100 })]);
+    await store.loadStats();
+
+    expect(store.rateFor('a1f93c2e7b10')).toMatchObject({ rx: 0, tx: 0 });
+
+    now.mockRestore();
+  });
+});
+
 describe('筛选与搜索', () => {
   async function seed() {
     api.containers.mockResolvedValue(

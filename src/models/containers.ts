@@ -62,6 +62,20 @@ export const useContainersStore = defineStore('containers', () => {
   const serverId = ref('');
   const list = ref<ContainerList | null>(null);
   const stats = ref<Record<string, ContainerStats>>({});
+  /**
+   * 上一拍的累计字节与时刻。
+   *
+   * `docker stats` 只给累计收发（`net_rx_bytes` / `net_tx_bytes`），要看「现在多快」
+   * 必须自己差分，而差分得有上一拍——核心侧是无状态的，这份历史只能放在前端。
+   */
+  const samples = ref<Record<string, { rx: number; tx: number; at: number }>>({});
+  /**
+   * 网络速率（字节/秒），附带这次差分覆盖了多少秒。
+   *
+   * 窗口必须一起带出去：列表 15 秒补一次 stats，抽屉开着时 3 秒一次，
+   * 同样是「速率」，一个是 15 秒平均一个接近瞬时，不说明白会被当成同一件事。
+   */
+  const rates = ref<Record<string, { rx: number; tx: number; seconds: number }>>({});
   const detail = ref<ContainerDetail | null>(null);
   const logs = ref<ContainerLogs | null>(null);
 
@@ -167,6 +181,9 @@ export const useContainersStore = defineStore('containers', () => {
       serverId.value = id;
       list.value = null;
       stats.value = {};
+      // 换了服务器，上一台的累计值毫无意义——留着会让第一条速率串台
+      samples.value = {};
+      rates.value = {};
       detail.value = null;
       logs.value = null;
     }
@@ -199,13 +216,52 @@ export const useContainersStore = defineStore('containers', () => {
   async function loadStats(): Promise<void> {
     if (!serverId.value) return;
     try {
+      const now = Date.now();
       const rows = await adminApi.containerStats(serverId.value);
       const map: Record<string, ContainerStats> = {};
-      for (const row of rows) map[row.id] = row;
+      const nextSamples: Record<string, { rx: number; tx: number; at: number }> = {};
+      const nextRates: Record<string, { rx: number; tx: number; seconds: number }> = {};
+
+      for (const row of rows) {
+        map[row.id] = row;
+
+        const prev = samples.value[row.id];
+        const seconds = prev ? (now - prev.at) / 1000 : 0;
+        if (prev && seconds >= 0.5) {
+          const dRx = row.net_rx_bytes - prev.rx;
+          const dTx = row.net_tx_bytes - prev.tx;
+          // 容器重启会把累计值清零，负差值不能当速率（会变成负的「倒流」）
+          nextRates[row.id] = {
+            rx: dRx >= 0 ? dRx / seconds : 0,
+            tx: dTx >= 0 ? dTx / seconds : 0,
+            seconds,
+          };
+        } else if (rates.value[row.id]) {
+          // 两次采样挨得太近（列表 15s 与抽屉 3s 撞在一起）：沿用上一拍，
+          // 否则一除就抖成 0
+          nextRates[row.id] = rates.value[row.id];
+        }
+
+        nextSamples[row.id] = { rx: row.net_rx_bytes, tx: row.net_tx_bytes, at: now };
+      }
+
       stats.value = map;
+      samples.value = nextSamples;
+      rates.value = nextRates;
     } catch {
       /* 静默：stats 是锦上添花 */
     }
+  }
+
+  /** 这一行最近一次算出的网络速率；还没采够两拍就是 undefined。 */
+  function rateFor(id: string): { rx: number; tx: number; seconds: number } | undefined {
+    const direct = rates.value[id];
+    if (direct) return direct;
+    // 和 `statsFor` 同样的前缀兜底：`ps` 与 `stats` 的短 id 长度未必一致
+    const key = Object.keys(rates.value).find(
+      (k) => k.startsWith(id) || id.startsWith(k),
+    );
+    return key ? rates.value[key] : undefined;
   }
 
   async function loadDetail(cid: string): Promise<void> {
@@ -293,6 +349,8 @@ export const useContainersStore = defineStore('containers', () => {
     serverId.value = '';
     list.value = null;
     stats.value = {};
+    samples.value = {};
+    rates.value = {};
     detail.value = null;
     logs.value = null;
     loading.value = false;
@@ -320,6 +378,7 @@ export const useContainersStore = defineStore('containers', () => {
     visible,
     hasEngine,
     hasStats,
+    rateFor,
     setDensity,
     showFeedback,
     clearFeedback,
@@ -410,17 +469,4 @@ export function trafficPair(rx: number, tx: number): string {
     return `↑${(tx / 1024).toFixed(1)} ↓${(rx / 1024).toFixed(1)} KB`;
   }
   return `↑${(tx / 1024 / 1024).toFixed(1)} ↓${(rx / 1024 / 1024).toFixed(1)} MB`;
-}
-
-/**
- * 列表里的 NET 只放**接收量**。
- *
- * `↑112.6 ↓103.0 MB` 塞不进 148px 的资源列，稍宽一点开头的 `↑` 就被裁掉，
- * 用户看到的是「112.6 ↓103.0 MB」——缺半个符号比只给一个数更难读。
- * 接收量是更常被关心的那一半，发送量放进 title。
- */
-export function netShort(rx: number): string {
-  if (rx >= 1024 * 1024) return `↓${(rx / 1024 / 1024).toFixed(1)} MB`;
-  if (rx >= 1024) return `↓${(rx / 1024).toFixed(1)} KB`;
-  return `↓${Math.round(rx)} B`;
 }

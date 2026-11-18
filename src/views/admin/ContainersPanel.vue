@@ -13,7 +13,6 @@ import {
   memDetail,
   memPercent,
   memText,
-  netShort,
   trafficPair,
   shortImage,
   splitImage,
@@ -290,6 +289,54 @@ function liveStats(item: ContainerItem): boolean {
   return item.state !== 'exited' && store.hasStats(item.id);
 }
 
+/**
+ * MEM 的展示：用量 + 占上限的百分比。
+ *
+ * 没设内存上限（`HostConfig.Memory = 0`）时不显示百分比——那时 `memPercent` 是 0，
+ * 写出来就是「473 MB · 0%」，看着像没占内存。
+ */
+function memLine(item: ContainerItem): string {
+  const used = memText(item);
+  if (item.mem_limit_bytes <= 0) return used;
+  const pct = memPercent(item);
+  // 7.8 MB / 21.7 GB 四舍五入是 0.0%：写成 `0%` 看着像没占内存
+  return `${used} · ${pct < 0.1 ? '<0.1' : pct}%`;
+}
+
+/**
+ * NET 的展示：**当前速率**，不是累计。
+ *
+ * `docker stats` 只给累计字节，速率由 store 在两次采样之间差分得出。
+ * 还没采够两拍（刚打开列表）时给 —，别拿一个假的 0 冒充「没有流量」。
+ */
+function netRateText(item: ContainerItem): string {
+  const rate = store.rateFor(item.id);
+  return rate ? `${trafficPair(rate.rx, rate.tx)}/s` : '—';
+}
+
+/** NET 的悬浮提示：说清速率的采样窗口，累计值也留在这里（一共搬了多少）。 */
+function netTitle(item: ContainerItem): string {
+  if (!liveStats(item)) return '';
+  const rate = store.rateFor(item.id);
+  const window = rate
+    ? `最近 ${rate.seconds.toFixed(0)} 秒平均`
+    : '速率还没算出来（需要两次采样）';
+  return `${window} · 累计收发 ${trafficPair(item.net_rx_bytes, item.net_tx_bytes)}`;
+}
+
+/**
+ * 进度条长度：**平方根**缩放，不是线性百分比。
+ *
+ * 真实数据是长尾的——这台机器上 18 个容器的 CPU 是 `0.09 / 0.07 / 0 / 0.28 …`，
+ * 只有一个跑到 20%。线性画出来的像素是 0.06 / 0.2 / 0.6 px，17 行全是空轨，
+ * 唯独那一行占满。平方根把小值抬起来、大值压下去：0.1% → 3%、2% → 14%、
+ * 20% → 45%，量级差别看得出来，精确值仍由上面的数字负责。
+ */
+function barPercent(raw: number): number {
+  if (raw <= 0) return 0;
+  return Math.min(100, Math.sqrt(Math.min(100, raw) / 100) * 100);
+}
+
 function statusClass(item: ContainerItem): string {
   if (item.health === 'unhealthy') return 'is-bad';
   if (item.state === 'restarting' || item.state === 'paused') return 'is-warn';
@@ -464,13 +511,10 @@ const confirmDanger = computed(() => confirm.action === 'remove' || confirm.acti
           </div>
           <div class="ct-cell ct-res-cell" :title="liveStats(item) ? '' : '资源正在采集（docker stats 自带采样窗口，约 2 秒）'">
             <span class="ct-res"><i>CPU</i><b class="mono">{{ liveStats(item) ? `${item.cpu_percent.toFixed(1)}%` : '—' }}</b></span>
-            <span class="ct-res"><i>MEM</i><b class="mono">{{ liveStats(item) ? memText(item) : '—' }}</b></span>
+            <span class="ct-res"><i>MEM</i><b class="mono">{{ liveStats(item) ? memLine(item) : '—' }}</b></span>
             <span class="ct-res">
               <i>NET</i>
-              <b
-                class="mono"
-                :title="liveStats(item) ? `累计收发 ${trafficPair(item.net_rx_bytes, item.net_tx_bytes)}` : ''"
-              >{{ liveStats(item) ? netShort(item.net_rx_bytes) : '—' }}</b>
+              <b class="mono" :title="netTitle(item)">{{ liveStats(item) ? netRateText(item) : '—' }}</b>
             </span>
             <span class="ct-res"><i>重启</i><b class="mono" :class="{ 'is-warn': item.restarts > 0 }">{{ item.restarts }} 次</b></span>
           </div>
@@ -500,8 +544,32 @@ const confirmDanger = computed(() => confirm.action === 'remove' || confirm.acti
             </template>
             <span v-else class="ct-muted">—</span>
           </span>
-          <span class="ct-num mono" :title="liveStats(item) ? '' : '资源正在采集（约 2 秒）'">{{ liveStats(item) ? `${item.cpu_percent.toFixed(1)}%` : '—' }}</span>
-          <span class="ct-num mono">{{ liveStats(item) ? memText(item) : '—' }}</span>
+          <!-- 数字在上、进度条在下（和原型一致）。只有百分比时得逐个比数字，
+               有条以后一眼就能看出谁在吃 CPU、谁把内存占满了。 -->
+          <div class="ct-metric">
+            <span
+              class="ct-num mono"
+              :title="liveStats(item) ? `CPU ${item.cpu_percent.toFixed(1)}%` : '资源正在采集（约 2 秒）'"
+            >{{ liveStats(item) ? `${item.cpu_percent.toFixed(1)}%` : '—' }}</span>
+            <span v-if="liveStats(item)" class="ct-meter">
+              <i
+                :class="levelClass(item.cpu_percent)"
+                :style="{ width: `${barPercent(item.cpu_percent)}%` }"
+              />
+            </span>
+          </div>
+          <div class="ct-metric">
+            <span
+              class="ct-num mono"
+              :title="liveStats(item) ? `内存 ${memText(item)}` : '资源正在采集（约 2 秒）'"
+            >{{ liveStats(item) ? memText(item) : '—' }}</span>
+            <span v-if="liveStats(item)" class="ct-meter">
+              <i
+                :class="levelClass(memPercent(item))"
+                :style="{ width: `${barPercent(memPercent(item))}%` }"
+              />
+            </span>
+          </div>
           <button class="ct-more" title="操作" @click.stop="openMenu($event, item)">⋯</button>
         </div>
       </template>
@@ -971,6 +1039,39 @@ const confirmDanger = computed(() => confirm.action === 'remove' || confirm.acti
   color: var(--text-2);
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+/* 主要视图的「数字 + 进度条」：数字靠右，条占满列宽。
+   条只有 3px，用来做量级对比，不追求可读的刻度。 */
+.ct-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  min-width: 0;
+}
+.ct-meter {
+  width: 100%;
+  height: 3px;
+  border-radius: 999px;
+  /* 和原型一致：轨道淡到不抢眼，让填充色成为唯一的信息 */
+  background: var(--tint-strong);
+  overflow: hidden;
+}
+.ct-meter i {
+  display: block;
+  height: 100%;
+  /* 0.1% 也要露出一小截：完全不可见会让人以为这块数据没采到 */
+  min-width: 2px;
+  border-radius: inherit;
+  /* 用单色而不是 `--grad`：3px 高的细条上，135° 渐变会把两个色相压成一个
+     发暗的中间色（晨光主题下是橙→墨青，混出来接近数字本身的灰棕）。 */
+  background: var(--mint);
+}
+.ct-meter i.is-warn {
+  background: var(--warn);
+}
+.ct-meter i.is-bad {
+  background: var(--bad);
 }
 .ct-more-n {
   margin-left: 4px;
