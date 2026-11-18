@@ -18,6 +18,7 @@ import {
   getDataDirStatus,
   isTauri,
   onCoreStateChange,
+  onWindowFocusChange,
   onWindowShown,
   refreshBootstrap,
   startCore,
@@ -58,12 +59,35 @@ let updateTimer: number | undefined;
  */
 const POLL_ONLINE_MS = 5000;
 const POLL_OFFLINE_MS = 5000;
-const POLL_HIDDEN_MS = 5000;
+/**
+ * 收起/失焦后的兜底轮询。
+ *
+ * 事件流（SSE）本身会把状态推过来，后台这档只是保险丝；而 WebView2 隐藏窗口
+ * 不一定会发 `visibilitychange`，所以这个值只在真的判定为"没人看"时才用。
+ */
+const POLL_HIDDEN_MS = 30_000;
 
 let timer: number | undefined;
 let delay = POLL_ONLINE_MS;
 let unlisten: (() => void) | undefined;
 let unlistenShown: (() => void) | undefined;
+let unlistenFocus: (() => void) | undefined;
+
+/**
+ * 界面是否正对着用户（窗口被托盘收起、最小化、或切到别的程序时为 false）。
+ *
+ * 它只体现到根元素的一个 class 上：全局样式据此暂停装饰性动效——那些
+ * 流光边框每帧都要重新栅格化 conic-gradient，窗口藏起来还继续跑就是白烧 GPU。
+ */
+const idle = ref(false);
+
+function setIdle(next: boolean) {
+  if (idle.value === next) {
+    return;
+  }
+  idle.value = next;
+  document.documentElement.classList.toggle('is-idle', next);
+}
 
 const connectionTag = computed(() => {
   if (runtime.connection === 'online') return { type: 'success' as const, text: '核心在线' };
@@ -493,7 +517,7 @@ async function poll() {
       runtime.markOffline(tunnels.lastError || '核心不可达');
     }
   }
-  const hidden = document.visibilityState === 'hidden';
+  const hidden = idle.value || document.visibilityState === 'hidden';
   delay = ok ? (hidden ? POLL_HIDDEN_MS : POLL_ONLINE_MS) : POLL_OFFLINE_MS;
   timer = window.setTimeout(poll, delay);
 }
@@ -532,8 +556,14 @@ function startEventStream(): void {
 }
 
 // 从后台切回前台时立刻补一次，不用干等下一个 tick。
+// 同时兜一层：非 Tauri 环境（浏览器调试）只有这个信号可用。
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && !timer) {
+  if (document.visibilityState === 'hidden') {
+    setIdle(true);
+    return;
+  }
+  setIdle(false);
+  if (!timer) {
     void pollNow();
   }
 });
@@ -579,6 +609,8 @@ onMounted(async () => {
   await refreshAll();
   // 事件流在建好初始数据之后再订阅：先有底图，再谈增量。
   startEventStream();
+  // 面板被收起/最小化/切到别的程序：立刻进入 idle，交给样式停掉动效。
+  unlistenFocus = await onWindowFocusChange((focused) => setIdle(!focused));
   timer = window.setTimeout(poll, delay);
 
   // 启动后延迟查一次版本：不抢首屏；失败静默（内网常不通 GitHub）
@@ -606,6 +638,7 @@ onUnmounted(() => {
   eventStream = null;
   unlisten?.();
   unlistenShown?.();
+  unlistenFocus?.();
 });
 </script>
 

@@ -2182,7 +2182,8 @@ code {
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
   mask-composite: exclude;
-  animation: tl-flow 3.4s linear infinite;
+  /* 60 步/圈 ≈ 15fps：这一圈每帧都要重新栅格化 conic-gradient，降帧是肉眼无感的省钱。 */
+  animation: tl-flow 3.4s steps(60) infinite;
   /* 提到独立合成层：WebView2 偶发不启动 @property 动画，加这行能稳定触发。 */
   will-change: --tl-angle;
   pointer-events: none;
@@ -2210,6 +2211,37 @@ code {
      */
     animation-duration: 9s;
   }
+}
+
+/* 窗口不在前台（托盘收起 / 最小化 / 切到别的程序）：把流光停掉。
+ *
+ * 这圈光每帧都要重新栅格化 conic-gradient + mask-composite，走不了合成器；
+ * 窗口藏起来还继续跑，就是纯烧 GPU。`is-idle` 由 App.vue 按窗口焦点切换，
+ * 只有"确实没人看"时才挂上——切回前台立刻恢复，不改变运行中的视觉语义。
+ */
+.is-idle .is-live::before {
+  animation-play-state: paused;
+}
+
+/* 兜底：窗口不在前台时，任何还没被点名的持续动画也一并停住。
+ *
+ * 这里只暂停动画，不改布局、不改可见性——切回前台会原样恢复。
+ * 目的是"后台不出帧"，而不是"后台不可用"。
+ */
+.is-idle *,
+.is-idle *::before,
+.is-idle *::after {
+  animation-play-state: paused !important;
+}
+
+/* 滚出视口的卡片：同样停掉流光。
+ *
+ * 由 ForwardCard 的 IntersectionObserver 打标记。列表很长时，滚出去的那批
+ * 不再参与每帧重绘，"一共 26 条在跑"也不会变成 26 份 GPU 开销。
+ * 注意只停动画、不移除外发光——卡片在不在跑，靠静态的 is-live 依然一眼能看出来。
+ */
+.is-live.is-offscreen::before {
+  animation-play-state: paused;
 }
 
 /* 设置页的信息表：Element 的默认表格在深色里是灰白块，统一到卡片质感 */

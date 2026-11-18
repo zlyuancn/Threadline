@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 端口转发卡片。首页与「所有转发」页共用同一份，避免两处样式与行为漂移。
-import { computed } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useTunnelsStore } from '../models/tunnels';
 import { forwardBlockedReason } from '../models/forwardStatus';
@@ -58,6 +58,39 @@ const blocked = computed(() =>
   forwardBlockedReason(props.view.status, props.server ?? undefined),
 );
 
+/**
+ * 卡片在不在视口附近。
+ *
+ * 运行中的卡片要挂一圈流光边框，而那一圈每帧都得重新栅格化 conic-gradient
+ * （走不了合成器）。长列表里滚出去的卡片没必要跟着转——只让看得见的那些动，
+ * 开销就跟"屏幕上几张"挂钩，而不是"一共几条转发"。
+ */
+const card = ref<HTMLElement | null>(null);
+const onScreen = ref(true);
+let observer: IntersectionObserver | null = null;
+
+onMounted(() => {
+  if (!card.value || typeof IntersectionObserver === 'undefined') {
+    return;
+  }
+  observer = new IntersectionObserver(
+    (entries) => {
+      const last = entries[entries.length - 1];
+      if (last) {
+        onScreen.value = last.isIntersecting;
+      }
+    },
+    // 提前 160px 恢复：滚到跟前时光已经在转，不会"进了视口才亮"。
+    { rootMargin: '160px' },
+  );
+  observer.observe(card.value);
+});
+
+onUnmounted(() => {
+  observer?.disconnect();
+  observer = null;
+});
+
 function openLocal() {
   openForwardUrl(urlOf(props.view as unknown as ForwardLike)).catch((e: unknown) => {
     ElMessage.error(e instanceof Error ? e.message : String(e));
@@ -76,8 +109,9 @@ async function copyUrl() {
 
 <template>
   <article
+    ref="card"
     class="fcard"
-    :class="{ 'is-live': state === 'running' }"
+    :class="{ 'is-live': state === 'running', 'is-offscreen': !onScreen }"
     :data-forward-id="def.id"
   >
     <div class="fcard-head">

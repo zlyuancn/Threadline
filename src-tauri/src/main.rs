@@ -13,6 +13,7 @@
 #![windows_subsystem = "windows"]
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -24,6 +25,10 @@ use tauri::{AppHandle, Emitter, Manager};
 
 const CONTROL_FILE: &str = "control.json";
 const MAIN_WINDOW: &str = "main";
+
+/// WebView2 当前是否处于渲染状态。只用于去重，避免一次拖动就把几十条
+/// `SetIsVisible` 派发到 UI 线程；初值按"窗口可见"算，与启动配置一致。
+static WEBVIEW_RENDERING: AtomicBool = AtomicBool::new(true);
 
 /// 数据目录：`--data-dir <绝对路径>` 优先（便于测试与绿色部署），否则 `%PUBLIC%\Threadline`。
 ///
@@ -224,8 +229,72 @@ fn core_alive() -> bool {
     }
 }
 
+/// 让 WebView2 停止 / 恢复渲染。
+///
+/// `window.hide()` 只是把 HWND 藏起来，WebView2 仍然认为自己显示在屏幕上：
+/// 合成器继续出帧、CSS 动画继续跳，后台就一直在烧 GPU。把 controller 的
+/// `IsVisible` 设成 false 会停掉整条渲染链路（WebView2 官方的省资源手段），
+/// 窗口重新出现时再置回 true。
+///
+/// 用静态变量去重：`Resized` 在拖窗口时连发几十次，没必要每次都派发到 UI 线程。
+/// 失败只记日志，不改窗口行为：最坏情况退化成"后台仍然渲染"，不是功能损坏。
+fn set_webview_rendering(window: &tauri::WebviewWindow, visible: bool) {
+    if WEBVIEW_RENDERING.swap(visible, Ordering::Relaxed) == visible {
+        return;
+    }
+    log_line(&format!("webview: rendering={visible}"));
+    let _ = window.with_webview(move |webview| {
+        let controller = webview.controller();
+        unsafe {
+            if let Err(error) = controller.SetIsVisible(visible) {
+                log_line(&format!("webview: SetIsVisible({visible}) failed: {error}"));
+            }
+        }
+    });
+}
+
+/// 按窗口真实状态对齐渲染：**看得见且没最小化** 才需要出帧。
+///
+/// 只做「最小化就关、看得见就开」，隐藏中的中间态一律不动——`hide()` 是异步的，
+/// 若在它真正生效前依据 `is_visible()` 反推，会把刚关掉的渲染又打开，
+/// 这正是后台偶发仍占 GPU 的来源。藏窗口的入口自己负责关。
+fn sync_webview_rendering(window: &tauri::Window) {
+    if let Some(panel) = window.app_handle().get_webview_window(MAIN_WINDOW) {
+        sync_panel_state(&panel);
+    }
+}
+
+fn sync_panel_state(panel: &tauri::WebviewWindow) {
+    if panel.is_minimized().unwrap_or(false) {
+        set_webview_rendering(panel, false);
+    } else if panel.is_visible().unwrap_or(false) {
+        set_webview_rendering(panel, true);
+    }
+}
+
+/// 兜底对齐线程：每 400ms 核对一次窗口真实状态。
+///
+/// 事件驱动不够用——实测从任务栏还原最小化的窗口时，Tauri 既不保证发
+/// `Resized`，也不保证发 `Focused`，于是"关掉的渲染"再也开不回来（窗口
+/// 一片空白）。反过来，某些隐藏路径若漏了事件，又会让后台继续出帧。
+/// 这个线程只做两件事：读两个 bool、必要时切换渲染；状态没变时是一次
+/// 去重后的空操作，代价可以忽略。
+fn spawn_render_watcher(app: &AppHandle) {
+    let handle = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(400));
+        match handle.get_webview_window(MAIN_WINDOW) {
+            Some(panel) => sync_panel_state(&panel),
+            // 窗口已销毁（退出中）：线程自然结束。
+            None => break,
+        }
+    });
+}
+
 fn show_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        // 先把渲染链路接回来再显示窗口：反过来的话，弹出的第一帧会是空白。
+        set_webview_rendering(&window, true);
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -243,6 +312,8 @@ fn show_window(app: &AppHandle) {
 #[tauri::command]
 fn hide_window(app: AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        // 先停渲染再藏窗口：只 hide 的话 WebView2 会在后台继续出帧。
+        set_webview_rendering(&window, false);
         let _ = window.hide();
     }
 }
@@ -1675,6 +1746,7 @@ mod hotkey {
             let visible = window.is_visible().unwrap_or(false);
             let focused = window.is_focused().unwrap_or(false);
             if visible && focused {
+                super::set_webview_rendering(&window, false);
                 let _ = window.hide();
             } else {
                 super::show_window(app);
@@ -1837,8 +1909,13 @@ fn main() {
             // 登录自启（--tray）只留托盘；双击图标才把界面弹出来。
             if !tray_only_requested() {
                 show_window(&handle);
+            } else if let Some(panel) = app.get_webview_window(MAIN_WINDOW) {
+                // 常驻托盘启动时窗口从未显示过，WebView 默认仍是"可见"的，
+                // 不显式关掉就会在后台一直出帧。
+                set_webview_rendering(&panel, false);
             }
             spawn_bootstrap_injection(handle.clone());
+            spawn_render_watcher(&handle);
             let manager = hotkey::start(handle, load_hotkey());
             app.manage(hotkey::State(std::sync::Mutex::new(Some(manager))));
 
@@ -1854,11 +1931,30 @@ fn main() {
             Ok(())
         })
         // 关窗 = 收进托盘，不退出（退出服务与退出助手是两件事）。
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
+                if let Some(panel) = window.app_handle().get_webview_window(MAIN_WINDOW) {
+                    set_webview_rendering(&panel, false);
+                }
                 let _ = window.hide();
             }
+            // 最小化不走 hide()、从任务栏还原也不经过 show_window()：
+            // 这两个事件把「窗口实际看得见吗」再对齐一次，堵掉偶发漏判。
+            // 失焦不在这里处理——窗口仍可见时必须继续渲染，否则画面会停在旧帧。
+            tauri::WindowEvent::Resized(_) => sync_webview_rendering(window),
+            tauri::WindowEvent::Focused(focused) => {
+                if *focused {
+                    sync_webview_rendering(window);
+                } else if window.is_minimized().unwrap_or(false) {
+                    // 少数系统上最小化只给焦点事件：确认是最小化才关，
+                    // 「切到别的窗口」不能关——窗口还看得见，关了就是一片空白。
+                    if let Some(panel) = window.app_handle().get_webview_window(MAIN_WINDOW) {
+                        set_webview_rendering(&panel, false);
+                    }
+                }
+            }
+            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("运行 Threadline Agent 失败");
