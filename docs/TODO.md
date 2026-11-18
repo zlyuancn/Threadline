@@ -231,8 +231,11 @@
 
 ## 续接点（新会话先读这里）
 
-- **仓库**：单仓 `C:\my\threadline`（工作区文档 + `threadline`）；原私有远端 `git@git.zly.m:zlyuancn/threadline.git`
-  **自 2026-11-13 起停止推送**（用户改从公共仓库同步），日常只做本地 commit。
+- **仓库**：单仓 `C:\my\threadline`（工作区文档 + `threadline`）。唯一远程是 `github`
+  （`git@github.com:zlyuancn/Threadline.git`），`main` 跟踪 `github/main`。
+  `git.zly.m` 那个私有远端已于 2026-11-18 从 remote 中移除——它在本机配置成拉取型镜像，
+  push 会被拒（`Mirror Repository zlyuancn/threadline is read-only`），留着只会让
+  `git status` 长期显示 ahead 并诱导误推。
 - **测试环境状态**：本机门禁全绿（cargo test 152 项 + agent 6 + frontend 22 + msocheck 44 + clippy + fmt + 构建）；
   两条冒烟脚本（`smoke.ps1` 控制面、`smoke-agent.ps1` 托盘与单实例）——`smoke-wake.ps1` 已随两进程改造删除。
   NSIS 安装包已产出并**实际安装过一次**（`%LOCALAPPDATA%\Threadline\`，两 exe + uninstall）。
@@ -265,6 +268,11 @@
   - 2026-11-13：**私有远端停止推送**——`git@git.zly.m:zlyuancn/threadline.git` 不再作为推送目标；
     用户改为从公共仓库同步代码。此后本仓只做本地 commit，AI 会话不得对该远端执行 push；
     何时与公共仓库对齐、是否重建历史由用户决定。
+  - 2026-11-18：**移除 `git.zly.m` 远程**——「不推送」还不够，它留在 remote 列表里会让
+    `git status` 长期显示 `ahead N`，看起来像「有东西没推上去」，而真去推又会被拒
+    （`Mirror Repository ... is read-only`）。现在 `git remote remove origin`，
+    唯一远程是 `github`、`main` 跟踪 `github/main`，`status` 直接反映与真源的差异。
+    镜像侧如何同步（Gitea 拉取周期等）由用户自行配置。
 
 ## 待确认（2026-10-21 收尾）
 
