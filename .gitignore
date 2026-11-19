@@ -28,3 +28,12 @@ dist/
 
 # 发布正文（release-notes.ps1 生成）
 release-body.md
+
+# 安卓工程：Gradle 构建产物与本机 SDK 路径（Rust 的 .so 落在 /tmp，不在这里）
+/android/.gradle/
+/android/.kotlin/
+/android/build/
+/android/app/build/
+/android/local.properties
+/android/app/src/main/jniLibs/
+

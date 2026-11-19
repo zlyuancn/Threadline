@@ -1,0 +1,24 @@
+[package]
+name = "tl-mobile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+publish = false
+description = "安卓端门面：把核心能力经 UniFFI 暴露给 Kotlin（零业务规则）"
+
+[lib]
+name = "tl_mobile"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+russh.workspace = true
+serde_json.workspace = true
+tl-core.workspace = true
+tl-protocol.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uniffi = { version = "0.32", features = ["cli"] }
+
+[build-dependencies]
+uniffi = { version = "0.32", features = ["build"] }

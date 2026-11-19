@@ -4,6 +4,8 @@ members = [
     "crates/tl-protocol",
     "crates/tl-core",
     "crates/tl-wake",
+    # 安卓端门面：只做类型映射与运行时持有（零业务规则），见 docs/plans/2026-11-19-android-client-design.md
+    "crates/tl-mobile",
 ]
 
 [workspace.package]
@@ -47,3 +49,4 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 tl-protocol = { path = "crates/tl-protocol" }
+tl-core = { path = "crates/tl-core" }
