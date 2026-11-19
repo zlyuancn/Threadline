@@ -46,12 +46,18 @@ crates/tl-core/       核心
   src/models/         ③ 模型层：credential / server / tunnel / runtime（数据与规则所有者）
   src/foundation/     底座：原子存储、DPAPI、日志、token、退避/超时/并发预算、注册层 Win32 封装
 crates/tl-wake/       启动编排（库，无独立二进制）
+crates/tl-mobile/     安卓端门面（UniFFI 导出，**零业务规则**；只做类型映射与运行时持有）
 src-tauri/            Agent（B4 落地）
 src/                  Vue 3 前端（views / api / models 三层）
+android/              安卓 App（Gradle 工程：Kotlin + Activity/Compose；首发 spike 为 `SpikeActivity`）
 tools/msocheck/       架构机检 R1-R6（分层与依赖方向 / 数据独占 / 前端收口 / 核心无头 / 壳不施放 / 环与终止保障）
 docs/mso/             MSO 规则本地副本（只读基准）
 docs/plans/           设计文档与实施计划
 ```
+
+**安卓端对 CAW 的偏离**：手机不跑 HTTP 控制面（无 axum / 无 token / 无 `control.json`），
+核心以**库**的形式编进 App，`tl-mobile` 经 UniFFI 直接调 Rust；状态仍由核心独占，UI 只是投影。
+设计见 `docs/plans/2026-11-19-android-client-design.md`。
 
 依赖方向恒为：壳 → 接口 → 业务 → 模型 → 底座。反向 import 由 `tools/msocheck` 在门禁里拦截。
 
@@ -68,7 +74,7 @@ docs/plans/           设计文档与实施计划
    `--workspace` 完全看不到它，两套 workspace 必须各跑一遍；`verify.ps1` 已经覆盖
    两套的 fmt/clippy/test 加上前端与 msocheck。v0.2.1 首次发版就栽在这上面——本地只跑了
    根 workspace 的 fmt，CI 的「格式检查（Agent）」直接红，Release 没出包。
-8. **不发散**：v1 只做 `-L` 本地转发；`-R`/`-D`/多用户/跨平台均不在范围内。
+8. **不发散**：v1 只做 `-L` 本地转发；`-R`/`-D`/多用户不做。跨平台只开安卓一扇门（2026-11-19 立项，同仓 `android/` + `crates/tl-mobile`），且同样只做 `-L`。
 
 ## 当前状态
 
@@ -80,3 +86,7 @@ B0–B6 已完成并可运行：
 - 本机门禁全绿（cargo test 136 项 + msocheck 44 项 + clippy + fmt + 前端构建）；三条冒烟脚本全绿；NSIS 安装包已产出。
 
 剩余 B7 全部是真机验证（真实 SSH 服务器转发、UAC 自启、零登录会话、安装器实装）。
+
+安卓端 A0（去风险 spike）构建侧已通：`tl-mobile` 交叉编译出 arm64 `.so`（含 `russh`+`ring`），
+UniFFI 生成 Kotlin 绑定，spike APK 可构建（7.4 MB）；**真机三项待验**（指纹 → `running` → 浏览器打开面板）。
+进度见 `docs/TODO.md`「待办 → 安卓端」。

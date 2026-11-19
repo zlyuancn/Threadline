@@ -8,10 +8,39 @@
 | 批次 | 状态 | 详情 |
 |---|---|---|
 | B7 收口（环境验证 + 安装实装） | 🚧 进行中 | `docs/TESTPLAN.md` |
+| 安卓端 A0–A5（`-L` + 内置浏览器） | 🚧 A0 进行中（构建侧已通，真机三项待验证） | `docs/plans/2026-11-19-android-client-design.md`、`docs/plans/2026-11-19-android-client-plan.md` |
 
 代码侧 B0–B6 已全部完成（见 `DONE.md`）。剩下的都是**只能在真机上做**的验证。
 
 ## 待办
+
+### 安卓端（2026-11-19 立项；A0 构建侧已通，真机项待验证）
+
+设计与计划：`docs/plans/2026-11-19-android-client-design.md`、`docs/plans/2026-11-19-android-client-plan.md`。
+定位 **B 档**：App 内 `-L` 转发 + 内置 WebView，并让第三方 App 共用本地端口；不做 hosts / 域名 / 装根 / 自启 / 服务器管理；
+C 档（DNS 劫持）留后续。技术栈：Kotlin + Compose + Rust 共享核心（UniFFI），**同仓** `android/` + `crates/tl-mobile`。
+
+- [x] **E1 工具链（2026-11-19 完成）**：JDK 17（`D:\ruanjian\jdk17\jdk-17.0.21.1+2`，解压免安装）+ Android SDK
+  （`%LOCALAPPDATA%\Android\Sdk`：platform-tools 37.0.1、platforms;android-35、build-tools 35.0.0、NDK 27.2.12479018）
+  + Gradle 8.10.2（`D:\ruanjian\gradle`，工程内已生成 wrapper）。用户环境变量 `JAVA_HOME` / `ANDROID_HOME` / `ANDROID_SDK_ROOT` / `ANDROID_NDK_HOME` 已写。
+- [x] **E2 交叉目标（2026-11-19 完成）**：`aarch64-linux-android` + `armv7-linux-androideabi`；`cargo-ndk 4.1.2`。
+- [x] **A0.1 交叉编译（2026-11-19 完成）**：`russh 0.64 + ring + tokio-rustls` 经 `cargo ndk` 编出 `libtl_mobile.so`
+  （release 6.33 MB，APK 7.43 MB）——`ring` 的 C 部分在 NDK 下无阻碍，**不需要退 `aws-lc-rs`，也不需要退 sshj**。
+- [~] **A0.2 UniFFI 起一条 `-L`（构建侧完成）**：`crates/tl-mobile` 门面（`start_forward` / `Forward.state|stop|traffic|lastError`）
+  + Kotlin 绑定（`android/app/src/main/java/uniffi/tl_mobile/tl_mobile.kt`，生成物入库）+ spike APK 构建通过；
+  **剩真机**：装 `app-debug.apk` → 首次拿到指纹并核对 → `running` → 手机浏览器开 `127.0.0.1:8123` → 拔网 30s 回 `running`。
+  宿主机 `cargo test -p tl-mobile` 已绿（状态词与桌面一致）。
+  - 阻塞：**当前本机无设备连接**（`adb devices` 为空），需要插手机开 USB 调试，并需要一台真实 SSH 服务器（家里 sshd）。
+- [ ] **A0.3 WebView 打回环别名**：未开始（依赖 A0.2 真机通过）。
+- [ ] A1 骨架：`tl-core` 安卓分流已提前落地一部分（`interface` 在 `cfg(not(android))` 之外的模块已能交叉编译、
+  `secret` 给了明确报错的安卓分支）；剩下 Keystore 桥、`atomic.rs` 的 rename 分支、Compose 工程与前台服务。
+- [ ] A2 转发管理：列表、增删改、启停、主机密钥确认、退避重连（复用现有模型）
+- [ ] A3 浏览器入口：WebView 宿主、回环别名开关、cookie 隔离验证、明文白名单
+- [ ] A4 前台服务：常驻通知、进程被杀恢复、Doze 引导、日志导出
+- [ ] A5 门禁：msocheck 纳入 `crates/tl-mobile`（+R7 门面不得藏规则）、`verify.ps1` 增 NDK 与 Gradle 两关
+- [ ] **门禁待补跑**：2026-11-19 改动 core + 新增 `tl-mobile` / `android` 后，`verify.ps1` 卡在
+  「app is running: Threadline(14564), tl-core(3320)」——core 侧 fmt/clippy/test 251+11+前端 142+msocheck 已全绿，
+  agent 侧四关与 NDK/Gradle 两关需关掉桌面 App 后补跑。
 
 ### 阻塞中（需要用户/环境侧处理）
 
@@ -251,8 +280,18 @@
 - **已真机验证**：真实 sshd 打通并跑通数据面（T-01）；主机密钥确认 → 信任 → 重新启动的完整用户流程。
 - **未做**：断线恢复与 keepalive 失效（T-06/T-09）、UAC 自启实测、零登录会话实测、卸载残留检查、
   本机程序接域名的真机链路。
-- **下一步**：先解决"安全软件白名单"（否则面板无法连外部 SSH），其余按上面「待办」逐条验证。
+- **下一步**：安卓端 **A0 真机三项**（工具链与交叉编译已通，见「待办 → 安卓端」）：插手机开 USB 调试 →
+  `gradlew :app:assembleDebug` 产物 `android/app/build/outputs/apk/debug/app-debug.apk` → 装机核对指纹 → `running` →
+  浏览器开 `127.0.0.1:8123`；随后 A0.3 回环别名（`127.0.0.5` + 两个 WebView 的 cookie 隔离）。
+  桌面侧并行先解决"安全软件白名单"（否则面板无法连外部 SSH），其余按「待办」逐条验证。
 - **拍板记录**：
+  - 2026-11-19：**安卓端立项**——定位 B 档（App 内 `-L` + 内置 WebView，并让第三方 App 共用本地端口），
+    不做 hosts / 域名 / 装根 / 自启；C 档（VpnService 只承载 DNS 的劫持）留作后续独立阶段。
+    技术栈 = Kotlin + Compose + **复用 Rust 核心经 UniFFI**（理由：`windows-sys` 已收在 `cfg(windows)`、
+    Win32 只在 4 个 foundation 文件、`russh` 用 `ring` 后端）；**不新增仓库**，同仓加 `android/` 与 `crates/tl-mobile`。
+    安卓端不跑 HTTP 控制面（CAW 偏离，状态仍由核心独占）。先做 A0 三天 spike，失败退 sshj。
+    设计见 `docs/plans/2026-11-19-android-client-design.md`，计划见 `docs/plans/2026-11-19-android-client-plan.md`
+    （含环境准备 E1–E2：本机当前缺 JDK / SDK / NDK / android target / cargo-ndk）。
   - 2026-10-19：产品名 **Threadline / 引线**；工作区 `C:\my\threadline`，项目 `threadline`；二进制 `tl` / `tl-core` / `tl-agent`。
   - 2026-10-19：开机自启 = 一个开关（运行期可切，切开关不停正在跑的服务）；停止服务 = 现在退出且不影响自启；Wake 在核心缺失时拉起用户身份 Core（自启已开却起不来 → `stand_in_core`）。
   - 2026-10-19：v1 仅 `-L`；凭据 = 使用者填写的私钥内容/密码，machine-scope DPAPI，不读 `~\.ssh`。
