@@ -138,6 +138,9 @@ export function buildProfile(opts: BuildOptions): BuiltPackage {
 
   const servers = opts.servers
     .filter((server) => selectedServers.has(server.id))
+    // 内置「本机」不进包：它是每台机器自己的条目（无凭据、无 SSH 主机），
+    // 导出去只会被导入方当成一条连不上的 SSH 连接重建出来。
+    .filter((server) => server.kind !== 'local')
     .map<ProfileServer>((server) => ({
       id: server.id,
       name: server.name,

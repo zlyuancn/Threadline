@@ -1481,6 +1481,98 @@ mod tests {
         assert_eq!(stored, vec!["home.example.com".to_string()]);
     }
 
+    /// 内置「本机」在接口上的契约：列表里有、恒已连接、写操作 409。
+    #[tokio::test]
+    async fn local_entry_is_listed_connected_and_immutable() {
+        use tower::ServiceExt;
+
+        let app = test_app();
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/servers")
+                    .header("authorization", "Bearer token")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("call");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        let first = &body["items"][0];
+        assert_eq!(first["id"], "local", "本机排在最前");
+        assert_eq!(first["kind"], "local");
+        assert_eq!(first["enabled"], true);
+        assert_eq!(first["needs_credential"], false, "本机没有凭据概念");
+
+        // 会话恒为已连接：界面据此显示「已连接」，不会去连 SSH。
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/servers/local/session")
+                    .header("authorization", "Bearer token")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("call");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(body["connected"], true);
+
+        // 改配置 / 断路：都是「动作与状态冲突」= 409，不能报成 500。
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("PATCH")
+                    .uri("/api/v1/servers/local")
+                    .header("authorization", "Bearer token")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .expect("request"),
+            )
+            .await
+            .expect("call");
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/servers/local/session/disconnect")
+                    .header("authorization", "Bearer token")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("call");
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/servers/local")
+                    .header("authorization", "Bearer token")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("call");
+        assert_eq!(response.status(), StatusCode::CONFLICT, "本机不可删");
+    }
+
     #[tokio::test]
     async fn preflight_from_tauri_origin_is_allowed_without_token() {
         use tower::ServiceExt;

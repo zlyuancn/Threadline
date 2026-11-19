@@ -28,7 +28,13 @@ pub fn plan(
     tunnels: &TunnelStore,
     req: ProfilePlanRequest,
 ) -> Result<ProfilePlan> {
-    let existing_servers = servers.list()?.items;
+    // 内置「本机」不参与分享包：它不该被覆盖、也不该占掉一个名字。
+    let existing_servers: Vec<_> = servers
+        .list()?
+        .items
+        .into_iter()
+        .filter(|s| s.kind != tl_protocol::ServerKind::Local)
+        .collect();
     let existing_forwards = tunnels
         .list()?
         .items
@@ -370,7 +376,13 @@ fn find_local_server(
     servers: &ServerStore,
     server: &ProfileImportServer,
 ) -> Result<Option<String>> {
-    let items = servers.list()?.items;
+    // 内置「本机」不在候选里：导入的包永远不该覆盖它。
+    let items: Vec<_> = servers
+        .list()?
+        .items
+        .into_iter()
+        .filter(|s| s.kind != tl_protocol::ServerKind::Local)
+        .collect();
     Ok(items
         .iter()
         .find(|item| item.id == server.source_id)
@@ -525,6 +537,17 @@ mod tests {
             servers,
             tunnels,
         }
+    }
+
+    /// 用户建出来的条目（跳过内置「本机」）：列表总把它排在最前，不能按索引取。
+    fn stored_servers(f: &Fixture) -> Vec<tl_protocol::ServerDto> {
+        f.servers
+            .list()
+            .expect("list")
+            .items
+            .into_iter()
+            .filter(|s| s.kind != tl_protocol::ServerKind::Local)
+            .collect()
     }
 
     /// 建一条「待填凭据」的连接：导入路径就是这个形态，测试不必造凭据。
@@ -730,7 +753,7 @@ mod tests {
         assert_eq!(result.created_forwards, 2);
         assert!(result.failed.is_empty());
 
-        let saved = f.servers.list().expect("list").items;
+        let saved = stored_servers(&f);
         assert!(saved[0].needs_credential, "导入的连接必须标成待填");
         assert!(!saved[0].enabled, "导入的连接不能自动启用");
         // 指纹按文件带过来（导入方可以改，但默认信任分享者）
@@ -853,7 +876,7 @@ mod tests {
         )
         .expect("import");
 
-        let saved = f.servers.list().expect("list").items;
+        let saved = stored_servers(&f);
         assert_eq!(saved[0].name, "new-name");
         assert_eq!(saved[0].host, "192.0.2.11");
         assert_eq!(saved[0].credential_id, cred.id, "覆盖不能清掉对方的密码");
@@ -887,7 +910,7 @@ mod tests {
         let first = import(&f.servers, &f.tunnels, req()).expect("import");
         assert_eq!(first.created_servers, 0);
         assert_eq!(first.skipped, 2, "连接与其转发都计入跳过");
-        assert!(f.servers.list().expect("list").items.is_empty());
+        assert!(stored_servers(&f).is_empty(), "用户条目一条都不该被建出来");
     }
 
     /// 包来自另一台机器时，连接 id 与本机不同、名字相同。

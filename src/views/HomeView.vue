@@ -495,6 +495,10 @@ async function testForward() {
     ElMessage.info('先选择一条连接');
     return;
   }
+  if (tunnels.isLocal(form.server_id)) {
+    ElMessage.info('本机不需要测试连接：转发开启后直接连本机端口');
+    return;
+  }
   if (forwardTesting.value) {
     return;
   }
@@ -998,10 +1002,16 @@ const activeCount = computed(
   () => selected.value?.children.filter((c) => c.view.status.state === 'running').length ?? 0,
 );
 
+/** 当前选中的是不是内置「本机」：它没有会话与管理页，卡片要收起那几处入口。 */
+const selectedIsLocal = computed(() => (selected.value ? tunnels.isLocal(selected.value.server.id) : false));
+
 const serverDesc = computed(() => {
   const row = selected.value;
   if (!row) {
     return '';
+  }
+  if (selectedIsLocal.value) {
+    return `本机程序：域名入口直接连本机端口，不经过 SSH。${row.children.length} 条转发。`;
   }
   if (tunnels.pendingFingerprint(row.server.id)) {
     return '首次连接，需要先核对这台主机的密钥指纹。';
@@ -1025,6 +1035,9 @@ const primaryLabel = computed(() => {
   const row = selected.value;
   if (!row) {
     return '建立连接';
+  }
+  if (tunnels.isLocal(row.server.id)) {
+    return '本机恒已连接';
   }
   if (!row.server.enabled) {
     return '建立连接';
@@ -1081,7 +1094,7 @@ function tunnelDot(row: { server: { id: string } }): string {
 
         <div class="server-body">
           <div class="server-top">
-            <span class="eyebrow">SSH SERVER</span>
+            <span class="eyebrow">{{ selectedIsLocal ? 'THIS PC · 本机' : 'SSH SERVER' }}</span>
             <span class="pill" :class="tunnelPill(selected)">
               <span class="dot" :class="tunnelDot(selected)" />
               {{ tunnelLabel(selected) }}
@@ -1089,13 +1102,17 @@ function tunnelDot(row: { server: { id: string } }): string {
           </div>
 
           <div class="server-addr mono">
-            {{ selected.server.username }}@{{ selected.server.host }}:{{ selected.server.port }}
+            {{
+              selectedIsLocal
+                ? '本机程序 · 转发直接连本机端口'
+                : `${selected.server.username}@${selected.server.host}:${selected.server.port}`
+            }}
           </div>
 
           <p class="server-desc">{{ serverDesc }}</p>
 
           <div class="tags">
-            <span class="tag"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7"/></svg> 保活 {{ selected.server.keepalive_secs }}s</span>
+            <span v-if="!selectedIsLocal" class="tag"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7"/></svg> 保活 {{ selected.server.keepalive_secs }}s</span>
             <span class="tag">{{ selected.children.length }} 条转发</span>
             <span v-if="tunnelRate" class="tag is-rate" title="这条隧道下所有转发的合计速率">
               <span class="rate-up">↑ {{ tunnelRate.up }}</span>
@@ -1112,28 +1129,32 @@ function tunnelDot(row: { server: { id: string } }): string {
         </div>
 
         <div class="server-actions">
-          <!-- 管理页入口：借这条隧道的会话去看服务器本身（系统信息/进程/容器…） -->
-          <button
-            class="btn"
-            title="管理这台服务器：系统信息、进程、容器，以及后续的终端与文件管理"
-            @click="emit('manage-server', selected.server.id)"
-          >
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5h11v3h-11zM2.5 9.5h11v3h-11z"/><path d="M5 6h.01M5 11h.01"/></svg> 管理
-          </button>
-          <button class="btn" @click="openTunnel(selected.server)">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11.2 2.3l2.5 2.5-8 8L3 13.5l.7-2.7 7.5-8.5z"/></svg> 编辑
-          </button>
-          <button class="btn" :disabled="busyKey !== null" @click="primaryAction">
-            {{ primaryLabel }}
-          </button>
-          <button
-            class="icon-btn is-danger"
-            title="删除这条隧道"
-            :disabled="busyKey !== null"
-            @click="removeTunnel(selected.server)"
-          >
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.2h5.8l.6-8.2"/></svg>
-          </button>
+          <!-- 本机是内置条目：没有会话可连、没有管理页、也不能改配置，这些入口一律不显示 -->
+          <template v-if="!selectedIsLocal">
+            <!-- 管理页入口：借这条隧道的会话去看服务器本身（系统信息/进程/容器…） -->
+            <button
+              class="btn"
+              title="管理这台服务器：系统信息、进程、容器，以及后续的终端与文件管理"
+              @click="emit('manage-server', selected.server.id)"
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5h11v3h-11zM2.5 9.5h11v3h-11z"/><path d="M5 6h.01M5 11h.01"/></svg> 管理
+            </button>
+            <button class="btn" @click="openTunnel(selected.server)">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11.2 2.3l2.5 2.5-8 8L3 13.5l.7-2.7 7.5-8.5z"/></svg> 编辑
+            </button>
+            <button class="btn" :disabled="busyKey !== null" @click="primaryAction">
+              {{ primaryLabel }}
+            </button>
+            <button
+              class="icon-btn is-danger"
+              title="删除这条隧道"
+              :disabled="busyKey !== null"
+              @click="removeTunnel(selected.server)"
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.2h5.8l.6-8.2"/></svg>
+            </button>
+          </template>
+          <span v-else class="tag">内置条目 · 恒已连接</span>
         </div>
       </section>
 
@@ -1382,7 +1403,7 @@ function tunnelDot(row: { server: { id: string } }): string {
             <el-option
               v-for="s in tunnels.servers"
               :key="s.id"
-              :label="`${s.name}（${s.username}@${s.host}）`"
+              :label="s.kind === 'local' ? '本机（跑在这台电脑上的程序）' : `${s.name}（${s.username}@${s.host}）`"
               :value="s.id"
             />
           </el-select>

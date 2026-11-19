@@ -54,6 +54,12 @@ export interface ServerEnabledResult {
 export interface ServerDto {
   id: string;
   name: string;
+  /**
+   * `ssh` = 远端服务器；`local` = 本机（内置条目，恒已连接，没有会话）。
+   *
+   * 老版本核心不会带这个字段，缺省按 `ssh` 处理。
+   */
+  kind?: 'ssh' | 'local';
   host: string;
   port: number;
   // 登录用户不单独存：唯一来源是凭据的 username。

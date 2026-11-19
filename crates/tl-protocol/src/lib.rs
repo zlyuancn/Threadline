@@ -113,6 +113,26 @@ pub enum CredentialKind {
     PrivateKey,
 }
 
+/// 访问对象的种类：远端 SSH 服务器，还是**跑在这台电脑上**的程序。
+///
+/// `Local` 是内置条目（见 [`LOCAL_SERVER_ID`]）：不落盘、无凭据、无主机密钥，
+/// 恒为已连接。它的转发不走 SSH，直接连本机端口。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerKind {
+    /// 远端 SSH 服务器（历史行为，也是旧数据的缺省值）。
+    #[default]
+    Ssh,
+    /// 本机：相当于一条已经连上的隧道。
+    Local,
+}
+
+/// 内置「本机」条目的固定 id。
+///
+/// 生成器只产出 `srv_*`，所以不会与用户创建的条目撞号；
+/// 落盘文件里的 `local` 会在读取时被归一成 `ssh`，避免伪造出第二个本机。
+pub const LOCAL_SERVER_ID: &str = "local";
+
 // ─────────────────────── 发现 / 状态响应 ───────────────────────
 
 /// `GET /healthz`（免鉴权）。
@@ -202,6 +222,9 @@ pub struct AutostartResult {
 pub struct ServerDto {
     pub id: String,
     pub name: String,
+    /// `ssh` = 远端服务器；`local` = 本机（内置条目，恒已连接）。
+    #[serde(default)]
+    pub kind: ServerKind,
     pub host: String,
     pub port: u16,
     /// 内部引用：登录材料由隧道自己创建并持有，界面上不再有「凭据」这一层。
@@ -1736,6 +1759,7 @@ mod tests {
             items: vec![ServerDto {
                 id: "srv_1".into(),
                 name: "web-01".into(),
+                kind: ServerKind::Ssh,
                 host: "192.0.2.90".into(),
                 port: 22,
                 credential_id: "cred_1".into(),
@@ -1772,6 +1796,7 @@ mod tests {
         let dto = ServerDto {
             id: "srv_1".into(),
             name: "web-01".into(),
+            kind: ServerKind::Ssh,
             host: "192.0.2.90".into(),
             port: 22,
             credential_id: String::new(),

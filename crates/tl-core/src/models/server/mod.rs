@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Result};
 use tl_protocol::{
     AcceptHostKeyRequest, CreateServerRequest, CredentialKind, HostKeyView, PatchServerRequest,
-    ServerDto, ServerList, ServersFile,
+    ServerDto, ServerKind, ServerList, ServersFile, LOCAL_SERVER_ID,
 };
 
 use crate::foundation::store;
@@ -24,6 +24,50 @@ use crate::models::credential::CredentialStore;
 use crate::models::RemoveDecision;
 
 use tl_protocol::SCHEMA_VERSION;
+
+/// 本机条目只在 Windows 上存在——本机管理不做跨平台。
+///
+/// 用编译期常量而不是运行时开关：非 Windows 构建里这个条目根本不该有，
+/// 而不是"先造出来再隐藏"。
+pub const LOCAL_SUPPORTED: bool = cfg!(windows);
+
+/// 这条 id 是否指内置的「本机」条目。
+pub fn is_local(id: &str) -> bool {
+    LOCAL_SUPPORTED && id == LOCAL_SERVER_ID
+}
+
+/// 内置「本机」条目：相当于一条**已经连上**的隧道。
+///
+/// 不落盘、无凭据、无主机密钥、恒为启用；`host` 只是给人看的，
+/// 它的转发直接连本机端口，不读这两个字段以外的任何东西。
+fn local_entry() -> ServerDto {
+    ServerDto {
+        id: LOCAL_SERVER_ID.to_string(),
+        name: "本机".to_string(),
+        kind: ServerKind::Local,
+        host: "127.0.0.1".to_string(),
+        port: 0,
+        credential_id: String::new(),
+        username: String::new(),
+        credential_kind: CredentialKind::Password,
+        host_key_fingerprint: None,
+        keepalive_secs: 0,
+        enabled: true,
+        session_error: None,
+        needs_credential: false,
+    }
+}
+
+/// 对内置条目的写操作统一拒绝：它没有可改的配置，也不该被删除。
+///
+/// 措辞用「不允许」而不是「不支持」：接口层把它翻成 409（用户动作与当前状态冲突），
+/// 报成 500 会让界面以为核心出了故障。
+fn reject_local(id: &str, action: &str) -> Result<()> {
+    if is_local(id) {
+        return Err(anyhow!("「本机」是内置条目，不允许{action}"));
+    }
+    Ok(())
+}
 
 /// 待确认的主机密钥：**内存态、不落盘**（重启后重新观测，避免把可疑指纹持久化）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +130,9 @@ impl ServerStore {
             if let Some(kind) = kinds.get(&server.credential_id) {
                 server.credential_kind = *kind;
             }
+            // 文件里只允许远端条目：手改出来的 `kind: local` 一律归一成 ssh，
+            // 否则会出现第二个「本机」抢同一个 id。
+            server.kind = ServerKind::Ssh;
         }
         Ok(file)
     }
@@ -128,7 +175,25 @@ impl ServerStore {
             item.session_error = errors.get(&item.id).cloned();
             decorate(item);
         }
-        Ok(ServerList { items })
+        drop(errors);
+        // 本机永远排在最前：它是"已经连上的那条"，不该被用户条目的顺序挤下去。
+        let mut all = Vec::with_capacity(items.len() + 1);
+        if LOCAL_SUPPORTED {
+            all.push(local_entry());
+        }
+        all.extend(items);
+        Ok(ServerList { items: all })
+    }
+
+    /// 这条 id 的传输种类。找不到时按"不存在"报错，不猜。
+    pub fn kind_of(&self, id: &str) -> Result<ServerKind> {
+        if is_local(id) {
+            return Ok(ServerKind::Local);
+        }
+        if self.load()?.items.iter().any(|s| s.id == id) {
+            return Ok(ServerKind::Ssh);
+        }
+        Err(anyhow!("服务器不存在：{id}"))
     }
 
     /// 记下"这次为什么没连上"。成功建立会话时由 `clear_session_error` 清掉。
@@ -162,6 +227,8 @@ impl ServerStore {
         let mut dto = ServerDto {
             id: new_id(&req.name, &taken),
             name: req.name,
+            // 用户只能创建远端条目；本机由内核注入。
+            kind: ServerKind::Ssh,
             host: req.host,
             port: req.port,
             credential_id: req.credential_id,
@@ -182,6 +249,7 @@ impl ServerStore {
     /// 只改「启用」意图。走单独方法是因为它必须伴随会话的建立/断开，
     /// 由业务层编排；`patch()` 只管纯配置字段。
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<ServerDto> {
+        reject_local(id, "启用或关闭")?;
         let mut file = self.load()?;
         // 待填凭据的连接不能启用：否则会话建不起来，keeper 会一直退避重试。
         let pending = file
@@ -207,6 +275,7 @@ impl ServerStore {
     }
 
     pub fn patch(&self, id: &str, req: PatchServerRequest) -> Result<ServerDto> {
+        reject_local(id, "修改")?;
         if let Some(cred) = &req.credential_id {
             self.require_credential(cred)?;
         }
@@ -255,6 +324,7 @@ impl ServerStore {
     }
 
     pub fn remove(&self, id: &str) -> Result<()> {
+        reject_local(id, "删除")?;
         let mut file = self.load()?;
         let before = file.items.len();
         file.items.retain(|s| s.id != id);
@@ -268,6 +338,7 @@ impl ServerStore {
 
     /// 是否仍被隧道引用（规则归本模型，业务层提供引用方列表）。
     pub fn can_remove(&self, id: &str, tunnels_using_it: &[String]) -> Result<RemoveDecision> {
+        reject_local(id, "删除")?;
         if tunnels_using_it.is_empty() {
             return Ok(RemoveDecision::Allowed);
         }
@@ -282,6 +353,11 @@ impl ServerStore {
 
     /// 取连接参数（不碰密钥材料）。
     pub fn connect_params(&self, id: &str) -> Result<ConnectParams> {
+        if is_local(id) {
+            return Err(anyhow!(
+                "「本机」不允许建立 SSH 会话：它的转发直接连本机端口"
+            ));
+        }
         let file = self.load()?;
         let server = file
             .items
@@ -305,6 +381,7 @@ impl ServerStore {
 
     /// 记录握手观测到的指纹，进入「待确认」。**不自动信任**（不做隐式 TOFU）。
     pub fn observe_host_key(&self, id: &str, fingerprint: &str, observed_at: &str) -> Result<()> {
+        reject_local(id, "记录主机密钥")?;
         let file = self.load()?;
         let server = file
             .items
@@ -327,6 +404,15 @@ impl ServerStore {
     }
 
     pub fn host_key_view(&self, id: &str) -> Result<HostKeyView> {
+        // 本机没有主机密钥：给出空视图，界面照常渲染「无待确认」。
+        if is_local(id) {
+            return Ok(HostKeyView {
+                server_id: id.to_string(),
+                trusted_fingerprint: None,
+                pending_fingerprint: None,
+                pending_observed_at: None,
+            });
+        }
         let file = self.load()?;
         let server = file
             .items
@@ -344,6 +430,7 @@ impl ServerStore {
 
     /// 接受/拒绝待确认指纹。接受 = 落盘为新信任；拒绝 = 清掉待确认。
     pub fn accept_host_key(&self, id: &str, req: AcceptHostKeyRequest) -> Result<ServerDto> {
+        reject_local(id, "确认主机密钥")?;
         let pending = self
             .pending
             .lock()
@@ -374,6 +461,9 @@ impl ServerStore {
 
     /// 供隧道模型使用的存在性判断（纯只读）。
     pub fn exists(&self, id: &str) -> Result<bool> {
+        if is_local(id) {
+            return Ok(true);
+        }
         Ok(self.load()?.items.iter().any(|s| s.id == id))
     }
 
@@ -407,7 +497,8 @@ fn validate_create(req: &CreateServerRequest) -> Result<()> {
 /// 派生字段统一在这里算：任何返回 DTO 的路径都要过一遍，
 /// 否则填完密码后列表仍会显示「待填」。
 fn decorate(dto: &mut ServerDto) {
-    dto.needs_credential = dto.credential_id.trim().is_empty();
+    // 本机没有凭据概念：它不该被标成「待填密码」。
+    dto.needs_credential = dto.kind == ServerKind::Ssh && dto.credential_id.trim().is_empty();
 }
 
 /// 生成一个在当前集合里唯一的 id。
@@ -490,6 +581,87 @@ mod tests {
         }
     }
 
+    /// 取某条持久化条目的当前状态。
+    ///
+    /// 列表现在总把内置「本机」排在最前，**不能再用 `items[0]`** 取用户条目。
+    fn stored(f: &Fixture, id: &str) -> ServerDto {
+        f.servers
+            .list()
+            .expect("list")
+            .items
+            .into_iter()
+            .find(|s| s.id == id)
+            .unwrap_or_else(|| panic!("列表里没有 {id}"))
+    }
+
+    #[test]
+    fn local_entry_comes_first_and_is_never_persisted() {
+        let f = fixture("local-entry");
+        f.servers
+            .create(create_req("web-01", &f.credential_id))
+            .expect("create");
+
+        let items = f.servers.list().expect("list").items;
+        assert_eq!(items[0].id, tl_protocol::LOCAL_SERVER_ID, "本机排在最前");
+        assert_eq!(items[0].kind, ServerKind::Local);
+        assert_eq!(items[0].name, "本机");
+        assert!(items[0].enabled, "本机恒为启用");
+        assert!(!items[0].needs_credential, "本机没有凭据概念");
+
+        // 文件里只有用户建的那条：本机是注入的，不落盘。
+        let raw = std::fs::read_to_string(f.servers.path()).expect("read servers.json");
+        assert!(!raw.contains(LOCAL_SERVER_ID), "本机不该写进 servers.json");
+    }
+
+    #[test]
+    fn local_entry_refuses_every_mutation() {
+        let f = fixture("local-guard");
+        let id = tl_protocol::LOCAL_SERVER_ID;
+
+        assert!(f.servers.kind_of(id).expect("kind") == ServerKind::Local);
+        assert!(f.servers.exists(id).expect("exists"));
+        assert!(f.servers.set_enabled(id, false).is_err());
+        assert!(f.servers.remove(id).is_err());
+        assert!(f.servers.can_remove(id, &[]).is_err());
+        assert!(f.servers.patch(id, PatchServerRequest::default()).is_err());
+        assert!(f.servers.connect_params(id).is_err(), "本机不需要会话");
+        assert!(f
+            .servers
+            .accept_host_key(id, AcceptHostKeyRequest { reject: true })
+            .is_err());
+
+        // 主机密钥视图给空值：界面据此渲染「无待确认」，不弹红条。
+        let view = f.servers.host_key_view(id).expect("view");
+        assert!(view.trusted_fingerprint.is_none());
+        assert!(view.pending_fingerprint.is_none());
+    }
+
+    #[test]
+    fn forged_local_entry_in_file_is_normalized_back_to_ssh() {
+        // 手改 servers.json 塞一条 kind=local：不能让它抢走内置条目的身份。
+        let f = fixture("forged-local");
+        std::fs::write(
+            f.servers.path(),
+            format!(
+                r#"{{"schema_version":{SCHEMA_VERSION},"items":[{{"id":"srv_x","name":"x","kind":"local","host":"192.0.2.9","port":22,"credential_id":"{}","host_key_fingerprint":null,"keepalive_secs":30}}]}}"#,
+                f.credential_id
+            ),
+        )
+        .expect("write");
+
+        let items = f.servers.list().expect("list").items;
+        let forged = items.iter().find(|s| s.id == "srv_x").expect("srv_x");
+        assert_eq!(
+            forged.kind,
+            ServerKind::Ssh,
+            "文件里的 local 一律归一成 ssh"
+        );
+        assert_eq!(
+            items.iter().filter(|s| s.kind == ServerKind::Local).count(),
+            1
+        );
+    }
+
     #[test]
     fn session_errors_show_up_in_the_list_until_cleared() {
         // 隧道行只有"未连接"三个字时，用户没法判断原因；错误必须随列表带出来，
@@ -505,7 +677,7 @@ mod tests {
 
         f.servers
             .set_session_error(&server.id, "连接 192.0.2.90:22 时收到 HTTP 响应（403）");
-        let shown = f.servers.list().expect("list").items[0]
+        let shown = stored(&f, &server.id)
             .session_error
             .clone()
             .expect("错误要出现在列表里");
@@ -513,9 +685,7 @@ mod tests {
 
         f.servers.clear_session_error(&server.id);
         assert!(
-            f.servers.list().expect("list").items[0]
-                .session_error
-                .is_none(),
+            stored(&f, &server.id).session_error.is_none(),
             "连上之后不能再挂着旧错误"
         );
     }
@@ -645,10 +815,7 @@ mod tests {
 
         let patched = f.servers.set_enabled(&server.id, false).expect("disable");
         assert!(!patched.enabled, "关闭后必须落盘为 false");
-        assert!(
-            !f.servers.list().expect("list").items[0].enabled,
-            "列表要反映真实意图"
-        );
+        assert!(!stored(&f, &server.id).enabled, "列表要反映真实意图");
     }
 
     #[test]
@@ -677,12 +844,14 @@ mod tests {
             .create(create_req("c", &f.credential_id))
             .expect("c");
 
+        // 只看用户条目：内置「本机」永远排在最前，不参与这组断言。
         let names = |store: &ServerStore| -> Vec<String> {
             store
                 .list()
                 .expect("list")
                 .items
                 .into_iter()
+                .filter(|s| s.kind == ServerKind::Ssh)
                 .map(|s| s.name)
                 .collect()
         };

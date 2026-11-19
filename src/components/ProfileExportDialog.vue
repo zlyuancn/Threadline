@@ -27,12 +27,20 @@ const forwardsOf = (serverId: string): TunnelDto[] =>
     .map((view) => view.definition)
     .filter((forward) => forward.server_id === serverId);
 
+/**
+ * 可以进分享包的连接。
+ *
+ * 内置「本机」不在其中：它是每台机器自己的条目（没有凭据、也没有 SSH 主机），
+ * 导出去只会被导入方当成一条连不上的 SSH 连接重建出来。
+ */
+const exportableServers = computed(() => servers.servers.filter((server) => server.kind !== 'local'));
+
 const visibleServers = computed(() => {
   const keyword = query.value.trim().toLowerCase();
   if (!keyword) {
-    return servers.servers;
+    return exportableServers.value;
   }
-  return servers.servers.filter(
+  return exportableServers.value.filter(
     (server) =>
       server.name.toLowerCase().includes(keyword) ||
       server.host.toLowerCase().includes(keyword) ||
@@ -80,7 +88,7 @@ function toggleForward(serverId: string, forwardId: string, checked: boolean): v
 }
 
 const selectedServerIds = computed(() =>
-  servers.servers.filter((server) => serverChecked(server.id)).map((server) => server.id),
+  exportableServers.value.filter((server) => serverChecked(server.id)).map((server) => server.id),
 );
 
 const selectedForwardIds = computed(() =>
@@ -93,7 +101,7 @@ const selectedForwardIds = computed(() =>
 /** 实际会进包的数量：连接被勾时它下面全部转发都算。 */
 const counts = computed(() => {
   let forwardCount = 0;
-  for (const server of servers.servers) {
+  for (const server of exportableServers.value) {
     if (!serverChecked(server.id)) {
       continue;
     }

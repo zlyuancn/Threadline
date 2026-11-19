@@ -2,6 +2,32 @@
 
 > 只增不改。收口时从 `TODO.md` 整条搬入，带完成日期、门禁结果与详情指针。
 
+## 2026-11-18
+
+### 新增：本机访问（把本机程序也接进域名访问）
+
+- **需求**：本机在跑的程序（`127.0.0.1:3000` 这类）也要能用 `app.zly.m` 打开，不再为了一个本机服务去
+  建一条 SSH 隧道绕一圈。用户口径：「本机相当于已经连上的一个 SSH 隧道」，且**入口侧不要特殊逻辑**。
+- **形态**：`ServerDto` 新增 `kind: ssh | local`；`ServerStore::list()` 注入内置条目「本机」
+  （`id = local`，恒已连接、恒启用，不写进 `servers.json`；非 Windows 构建不注入）。
+  本机下的转发与普通转发同构（`server_id = local`），`remote_host/remote_port` 就是本机程序地址。
+- **传输**：`engine::serve_listener` 的会话参数换成 `Upstream::{Ssh, Direct}`；`Direct` 用
+  `TcpStream::connect` 连目标（同一 10 秒预算），之后共用现有管线——入口 TLS 终止、HTTP Host 改写、
+  流量计数、并发上限全部复用；keepalive 心跳只在 `Ssh` 时跑。
+- **状态口径**：本机转发绑上端口即 `Running`；目标端口没开只影响那一次连接（`last_error` 记一句话），
+  不进退避、不把整条转发标红。`session_connected("local") = true`，`disconnect_session` 明确拒绝。
+- **模型纪律**：本机条目的改名 / 删除 / 启停 / 改配置 / 确认主机密钥一律拒绝；`connect_params` 直接报
+  「不需要 SSH 会话」。文件里手改出的 `kind: local` 读取时归一成 `ssh`，防止伪造第二个本机。
+  分享包（导入预判与落地）全程跳过内置条目。
+- **前端**：侧栏把「本机」置顶并标「内置」，卡片收起连接开关 / 管理 / 编辑 / 删除，新增「本机恒已连接」；
+  新建转发的服务器下拉多一项「本机（跑在这台电脑上的程序）」，远端地址默认 `127.0.0.1`；
+  隧道排序弹窗不列本机（它永远在最前）。
+- **门禁**：`cargo test --workspace` 251 + 11 + 24 + 18 全过（新增 6 项：本机注入不落盘 / 拒绝一切写操作 /
+  伪造条目归一 / Direct 出口端到端回显 / 本机转发不起 SSH 会话即 Running / 接口契约与 409）；
+  `cargo fmt --check`、`cargo clippy -D warnings`、`msocheck`（分层与依赖方向）、`pnpm typecheck`、
+  `pnpm test`（142）、`pnpm build` 全绿。
+- **未做（记在 `TODO.md`）**：真机上把一个真实本机程序接上域名跑通（含 hosts 与 https 本地终止两档）。
+
 ## 2026-11-13
 
 ### 发布：v0.2.1

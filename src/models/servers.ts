@@ -191,6 +191,16 @@ export const useServersStore = defineStore('servers', () => {
   }
 
   /**
+   * 这条 id 是不是内置的「本机」。
+   *
+   * 本机是"已经连上的隧道"：没有会话可连、可断，配置也不可改。
+   * 界面据此收起连接开关与管理入口，而不是让用户点了才发现被拒绝。
+   */
+  function isLocal(id: string): boolean {
+    return servers.value.find((s) => s.id === id)?.kind === 'local';
+  }
+
+  /**
    * 打开/关闭一条隧道。
    *
    * 开关只表示**用户意图**（由核心持久化）：连不上不会把开关弹回去，
@@ -270,5 +280,6 @@ export const useServersStore = defineStore('servers', () => {
     acceptHostKey,
     serverName,
     serverEnabled,
+    isLocal,
   };
 });

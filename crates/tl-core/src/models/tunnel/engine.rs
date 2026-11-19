@@ -113,6 +113,17 @@ pub enum FailurePhase {
 /// 一条可复用的 SSH 会话句柄。多条端口转发共用同一个。
 pub type SessionHandle = Arc<client::Handle<ClientHandler>>;
 
+/// 转发的出口：SSH 通道，还是直接连本机端口。
+///
+/// 「本机」条目是"已经连上的隧道"，没有会话可建——它的出口就是 `Direct`。
+/// 除了这一跳，管线其余部分（入口 TLS 终止、Host 改写、流量计数、并发上限）两者完全共用。
+#[derive(Clone)]
+pub enum Upstream {
+    Ssh(SessionHandle),
+    /// 直接 `TcpStream::connect` 到 `remote_host:remote_port`（本机程序）。
+    Direct,
+}
+
 /// 把引擎结局翻成一句人能读的话（写进 `last_error`，也作为启动失败的原因）。
 pub fn describe(outcome: &EngineOutcome) -> String {
     match outcome {
@@ -544,15 +555,15 @@ impl rustls::server::ResolvesServerCert for GatewayResolver {
     }
 }
 
-/// 在一个**已建立**的会话上跑某条转发的本地监听。
+/// 跑某条转发的本地监听。
 ///
-/// 会话由上层（`SessionHub`）持有：多条转发共用同一个 handle，
-/// 这里只负责 accept →（可选 TLS 终止）→ `direct-tcpip`；会话断了就结束。
+/// 出口由 `upstream` 决定：`Ssh` 走已建立的会话（多条转发共用同一个 handle），
+/// `Direct` 直接连本机端口。其余管线——accept →（可选 TLS 终止）→ 双向搬运——完全一致。
 // 这层是"把运行时状态一路传下去"的管线，参数天然多；拆结构体反而更难读。
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_listener(
     listener: TcpListener,
-    session: Arc<client::Handle<ClientHandler>>,
+    upstream: Upstream,
     remote_host: String,
     remote_port: u16,
     keepalive_secs: u64,
@@ -564,7 +575,7 @@ pub async fn serve_listener(
 ) -> (EngineOutcome, TcpListener) {
     let outcome = serve_listener_inner(
         &listener,
-        session,
+        upstream,
         remote_host,
         remote_port,
         keepalive_secs,
@@ -582,7 +593,7 @@ pub async fn serve_listener(
 #[allow(clippy::too_many_arguments)]
 async fn serve_listener_inner(
     listener: &TcpListener,
-    session: Arc<client::Handle<ClientHandler>>,
+    upstream: Upstream,
     remote_host: String,
     remote_port: u16,
     keepalive_secs: u64,
@@ -594,15 +605,23 @@ async fn serve_listener_inner(
 ) -> EngineOutcome {
     let on_error = Arc::new(on_error);
     let inflight = Arc::new(AtomicUsize::new(0));
-    let mut ticker = tokio::time::interval(Duration::from_secs(keepalive_secs.max(1)));
-    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    // keepalive 是 SSH 会话的健康检查：本机直连没有会话可查，不装这只表。
+    let session = match &upstream {
+        Upstream::Ssh(handle) => Some(Arc::clone(handle)),
+        Upstream::Direct => None,
+    };
+    let mut ticker = session.as_ref().map(|_| {
+        let mut ticker = tokio::time::interval(Duration::from_secs(keepalive_secs.max(1)));
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        ticker
+    });
 
     loop {
         tokio::select! {
             biased;
             _ = shutdown.changed() => return EngineOutcome::Stopped,
-            _ = ticker.tick() => {
-                if session.is_closed() {
+            _ = keepalive_tick(&mut ticker), if session.is_some() => {
+                if session.as_ref().is_some_and(|handle| handle.is_closed()) {
                     return EngineOutcome::NetworkFailed {
                         reason: "SSH 会话已断开（keepalive 超时或对端关闭）".to_string(),
                         during: FailurePhase::Serving,
@@ -654,33 +673,65 @@ async fn serve_listener_inner(
                     None => Box::new(inbound),
                 };
 
-                let handle = Arc::clone(&session);
+                let upstream = match &upstream {
+                    Upstream::Ssh(handle) => Upstream::Ssh(Arc::clone(handle)),
+                    Upstream::Direct => Upstream::Direct,
+                };
+                // 错误文案要说清是哪一侧：本机程序没起来与远端端口没开，处理方式完全不同。
+                let side = match upstream {
+                    Upstream::Ssh(_) => "服务器侧",
+                    Upstream::Direct => "本机",
+                };
                 let target = (remote_host.clone(), remote_port);
                 let traffic = Arc::clone(&traffic);
                 // 引用不能进 'static 任务，先落成拥有所有权的值
                 let rewrite_http = entry_tls.is_some();
                 let public_fallback = public_domain.map(str::to_string);
                 tokio::spawn(async move {
-                    // 连不上远端端口时错误必须上报，否则界面只表现为"连接被重置"。
-                    if let Err(e) = forward_one(
-                        handle,
-                        target.clone(),
-                        inbound,
-                        traffic,
-                        rewrite_http,
-                        public_fallback,
-                    )
-                    .await
-                    {
-                        report(format!(
-                            "无法连接 {}:{}（服务器侧）：{e}",
-                            target.0, target.1
-                        ));
+                    // 连不上目标端口时错误必须上报，否则界面只表现为"连接被重置"。
+                    let result = match upstream {
+                        Upstream::Ssh(handle) => {
+                            forward_one(
+                                handle,
+                                target.clone(),
+                                inbound,
+                                traffic,
+                                rewrite_http,
+                                public_fallback,
+                            )
+                            .await
+                        }
+                        Upstream::Direct => {
+                            forward_direct(
+                                target.clone(),
+                                inbound,
+                                traffic,
+                                rewrite_http,
+                                public_fallback,
+                            )
+                            .await
+                        }
+                    };
+                    if let Err(e) = result {
+                        report(format!("无法连接 {}:{}（{side}）：{e}", target.0, target.1));
                     }
                     counter.fetch_sub(1, Ordering::SeqCst);
                 });
             }
         }
+    }
+}
+
+/// 等一次 keepalive 心跳。
+///
+/// 本机直连没有 ticker（没有会话可查），这里就永远不返回——用 `pending` 而不是
+/// 「给一个大周期」：假心跳迟早会触发，届时检查的是一个不存在的会话。
+async fn keepalive_tick(ticker: &mut Option<tokio::time::Interval>) {
+    match ticker {
+        Some(ticker) => {
+            ticker.tick().await;
+        }
+        None => std::future::pending::<()>().await,
     }
 }
 
@@ -938,9 +989,10 @@ pub async fn open_pty(
     Ok(PtyChannel { channel })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn forward_one<S>(
     session: Arc<client::Handle<ClientHandler>>,
-    (remote_host, remote_port): (String, u16),
+    target: (String, u16),
     inbound: S,
     traffic: Arc<Traffic>,
     rewrite_http: bool,
@@ -951,14 +1003,7 @@ where
 {
     // 目标不可达时 russh 可能一直等对端确认：没有超时的话，本地连接会永久挂起，
     // 用户看到的是"连上了但没反应"，也永远不会有错误记录。
-    // 远端地址按转发规则里填的原样拼：它既是上行 `Host`，也是下行识别 Location 的依据。
-    // 80/443 是默认端口，不写进 Host。
-    let upstream_host = remote_host.clone();
-    let authority = if remote_port == 80 || remote_port == 443 {
-        upstream_host.clone()
-    } else {
-        format!("{upstream_host}:{remote_port}")
-    };
+    let (remote_host, remote_port) = target.clone();
     let channel = tokio::time::timeout(
         CHANNEL_OPEN_TIMEOUT,
         session.channel_open_direct_tcpip(remote_host, remote_port as u32, "127.0.0.1", 0),
@@ -975,7 +1020,81 @@ where
     })?
     .map_err(std::io::Error::other)?;
 
-    let outbound = channel.into_stream();
+    pipe_through(
+        channel.into_stream(),
+        target,
+        inbound,
+        traffic,
+        rewrite_http,
+        public_fallback,
+    )
+    .await
+}
+
+/// 本机直连：`TcpStream::connect` 到目标端口，之后与 SSH 那条走同一条管道。
+///
+/// 超时预算与 SSH 开通道一致（10 秒）：本机端口要么立刻通、要么就是没有程序在听，
+/// 让它挂在那里等只会让浏览器转圈。
+async fn forward_direct<S>(
+    (remote_host, remote_port): (String, u16),
+    inbound: S,
+    traffic: Arc<Traffic>,
+    rewrite_http: bool,
+    public_fallback: Option<String>,
+) -> Result<(), std::io::Error>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let outbound = tokio::time::timeout(
+        CHANNEL_OPEN_TIMEOUT,
+        tokio::net::TcpStream::connect((remote_host.as_str(), remote_port)),
+    )
+    .await
+    .map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("{} 秒内没有连上目标端口", CHANNEL_OPEN_TIMEOUT.as_secs()),
+        )
+    })??;
+    // 本机回环没有 MTU 与拥塞窗口要等：关掉 Nagle，交互式面板的按键不会被攒包。
+    let _ = outbound.set_nodelay(true);
+
+    pipe_through(
+        outbound,
+        (remote_host, remote_port),
+        inbound,
+        traffic,
+        rewrite_http,
+        public_fallback,
+    )
+    .await
+}
+
+/// 两条出口共用的双向搬运：上行 / 下行各一条，边搬边计数。
+///
+/// `outbound` 是已连上目标的流（SSH 通道或本机 TCP），`inbound` 是入口侧
+/// （可能是 TLS 终止后的明文流）。
+async fn pipe_through<O, S>(
+    outbound: O,
+    (remote_host, remote_port): (String, u16),
+    inbound: S,
+    traffic: Arc<Traffic>,
+    rewrite_http: bool,
+    public_fallback: Option<String>,
+) -> Result<(), std::io::Error>
+where
+    O: AsyncRead + AsyncWrite + Unpin + Send,
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    // 远端地址按转发规则里填的原样拼：它既是上行 `Host`，也是下行识别 Location 的依据。
+    // 80/443 是默认端口，不写进 Host。
+    let upstream_host = remote_host;
+    let authority = if remote_port == 80 || remote_port == 443 {
+        upstream_host.clone()
+    } else {
+        format!("{upstream_host}:{remote_port}")
+    };
+
     let (in_read, in_write) = tokio::io::split(inbound);
     let (out_read, out_write) = tokio::io::split(outbound);
 
@@ -1237,6 +1356,57 @@ where
 mod tests {
     use super::*;
     use tokio::net::TcpStream;
+
+    /// 本机出口：不经任何会话，直接把入口字节搬到本机端口，并且**不留心跳**。
+    ///
+    /// 这条链路最容易出的错是"把 Direct 当成一个有会话的路径"——比如期待
+    /// keepalive 触发 `NetworkFailed`，或者把目标错误归到"服务器侧"。
+    #[tokio::test]
+    async fn direct_upstream_proxies_to_a_local_port_without_a_session() {
+        // 目标：本机回环上的一个回声服务
+        let target = TcpListener::bind("127.0.0.1:0").await.expect("target");
+        let target_addr = target.local_addr().expect("target addr");
+        tokio::spawn(async move {
+            if let Ok((mut socket, _)) = target.accept().await {
+                let mut buf = vec![0u8; 64];
+                if let Ok(n) = socket.read(&mut buf).await {
+                    let _ = socket.write_all(&buf[..n]).await;
+                }
+            }
+        });
+
+        let entry = TcpListener::bind("127.0.0.1:0").await.expect("entry");
+        let entry_addr = entry.local_addr().expect("entry addr");
+        let (shutdown, shutdown_rx) = watch::channel(false);
+        let traffic = Arc::new(Traffic::default());
+
+        let serve = tokio::spawn(async move {
+            serve_listener(
+                entry,
+                Upstream::Direct,
+                target_addr.ip().to_string(),
+                target_addr.port(),
+                // 本机没有会话：心跳周期给 0 也不该报错，更不该去查会话
+                0,
+                shutdown_rx,
+                Box::new(|message| eprintln!("本机转发上报：{message}")),
+                traffic,
+                None,
+                None,
+            )
+            .await
+        });
+
+        let mut client = TcpStream::connect(entry_addr).await.expect("connect entry");
+        client.write_all(b"ping").await.expect("write");
+        let mut buf = [0u8; 4];
+        client.read_exact(&mut buf).await.expect("read");
+        assert_eq!(&buf, b"ping", "本机端口应当收到并回显");
+
+        shutdown.send(true).expect("shutdown");
+        let (outcome, _) = serve.await.expect("serve task");
+        assert_eq!(outcome, EngineOutcome::Stopped);
+    }
 
     fn rewrite_ctx(observed: Option<&str>, fallback: Option<&str>) -> HttpRewrite {
         HttpRewrite {

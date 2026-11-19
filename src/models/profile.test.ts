@@ -64,6 +64,30 @@ const forwards: TunnelDto[] = [
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 describe('buildProfile', () => {
+  it('never exports the built-in local entry', () => {
+    // 本机是每台机器自己的条目：导出后会被当成一条没有凭据的 SSH 连接重建出来。
+    const local: ServerDto = {
+      id: 'local',
+      name: '本机',
+      kind: 'local',
+      host: '127.0.0.1',
+      port: 0,
+      username: '',
+      host_key_fingerprint: null,
+      keepalive_secs: 0,
+      enabled: true,
+    };
+    const built = buildProfile({
+      servers: [local, ...servers],
+      forwards,
+      serverIds: ['local', 'srv_a'],
+      forwardIds: [],
+      includeIcons: true,
+      includeFingerprint: true,
+    });
+    expect(built.document.servers.map((s) => s.id)).toEqual(['srv_a']);
+  });
+
   it('brings the whole server when the server is selected', () => {
     const built = buildProfile({
       servers,

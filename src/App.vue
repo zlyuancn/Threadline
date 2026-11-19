@@ -656,7 +656,7 @@ onUnmounted(() => {
 
       <!-- 隧道列表：主对象放最上面 -->
       <div class="rail-section">
-        <span class="rail-section-k">SSH 连接</span>
+        <span class="rail-section-k">连接对象</span>
         <span class="rail-section-n">{{ servers.servers.length }}</span>
       </div>
 
@@ -679,13 +679,21 @@ onUnmounted(() => {
               {{ server.name }}
               <span class="dot" :class="tunnelDot(server.id)" />
               <span
+                v-if="server.kind === 'local'"
+                class="conn-badge"
+                title="内置条目：相当于一条已经连上的隧道，转发直接连本机端口"
+                >内置</span
+              >
+              <span
                 v-if="server.needs_credential"
                 class="conn-badge"
                 title="这条连接来自配置包，不含密码：编辑里填一次密码或私钥即可"
                 >待填密码</span
               >
             </span>
-            <span class="conn-host mono">{{ server.username }}@{{ server.host }}</span>
+            <span class="conn-host mono">
+              {{ server.kind === 'local' ? '本机程序 · 无需 SSH' : `${server.username}@${server.host}` }}
+            </span>
             <span v-if="speedOf(server.id)" class="conn-speed">
               <span class="rate-up">↑ {{ speedOf(server.id)?.up }}</span>
               <span class="rate-down">↓ {{ speedOf(server.id)?.down }}</span>

@@ -45,8 +45,8 @@ fn build_entry_tls(
         .map_err(|e| format!("构造入口 TLS 失败：{e}"))
 }
 use crate::models::credential::{CredentialMaterial, CredentialStore};
-use crate::models::server::ServerStore;
-use crate::models::tunnel::engine::{self, Login, ServeConfig, SessionHandle};
+use crate::models::server::{is_local, ServerStore};
+use crate::models::tunnel::engine::{self, Login, ServeConfig, SessionHandle, Upstream};
 use crate::models::tunnel::{effective_addr, entry_mode, fsm::TunnelEvent, EntryMode, TunnelStore};
 
 struct Running {
@@ -127,7 +127,12 @@ impl TunnelRunner {
     }
 
     /// 该隧道是否已有可用的 SSH 会话（界面用来显示"已连接/未连接"）。
+    ///
+    /// 「本机」恒为已连接：它就是这台电脑，没有会话可掉。
     pub fn session_connected(&self, server_id: &str) -> bool {
+        if is_local(server_id) {
+            return true;
+        }
         self.sessions
             .lock()
             .expect("sessions lock")
@@ -144,27 +149,38 @@ impl TunnelRunner {
         }
 
         let def = find_tunnel(&self.tunnels, id)?;
-        let params = self.servers.connect_params(&def.server_id)?;
+        // 「本机」是已经连上的隧道：没有会话可建，也没有"隧道未启用"这回事。
+        let local = is_local(&def.server_id);
+        let mut keepalive_secs = 0;
 
-        // 端口挂在隧道上：隧道没启用就不该建会话，否则那个开关就是一句空话
-        // （界面显示"未启用"，实际连接和转发都在跑——这正是用户发现的问题）。
-        if !params.enabled {
-            let reason = "隧道未启用：请先在「隧道」页启用这条隧道";
-            self.tunnels.stop(id)?;
-            self.tunnels.set_last_error(id, reason);
-            return Err(anyhow!(reason));
+        if !local {
+            let params = self.servers.connect_params(&def.server_id)?;
+
+            // 端口挂在隧道上：隧道没启用就不该建会话，否则那个开关就是一句空话
+            // （界面显示"未启用"，实际连接和转发都在跑——这正是用户发现的问题）。
+            if !params.enabled {
+                let reason = "隧道未启用：请先在「隧道」页启用这条隧道";
+                self.tunnels.stop(id)?;
+                self.tunnels.set_last_error(id, reason);
+                return Err(anyhow!(reason));
+            }
+            keepalive_secs = params.keepalive_secs as u64;
         }
 
         // 模型侧先进入 Connecting 并登记端口；规则（哪些状态能 start）由它判断。
         self.tunnels.start(id)?;
 
-        let session = match self.ensure_session(&def.server_id).await {
-            Ok(session) => session,
-            Err(outcome) => {
-                // 会话建不起来：把结局翻成事件，让模型给出正确状态（待确认/错误/退避）。
-                let event = engine::to_event(&outcome);
-                let _ = self.tunnels.apply(id, event);
-                return Err(anyhow!(engine::describe(&outcome)));
+        let session = if local {
+            None
+        } else {
+            match self.ensure_session(&def.server_id).await {
+                Ok(session) => Some(session),
+                Err(outcome) => {
+                    // 会话建不起来：把结局翻成事件，让模型给出正确状态（待确认/错误/退避）。
+                    let event = engine::to_event(&outcome);
+                    let _ = self.tunnels.apply(id, event);
+                    return Err(anyhow!(engine::describe(&outcome)));
+                }
             }
         };
 
@@ -192,17 +208,26 @@ impl TunnelRunner {
         self.tunnels.reset_traffic(id);
         let traffic = self.tunnels.traffic_of(id);
         let join = tokio::spawn(async move {
-            runner
-                .listener_loop(
-                    tunnel_id,
-                    def,
-                    params.keepalive_secs as u64,
-                    session,
-                    listener,
-                    cancel_rx,
-                    traffic,
-                )
-                .await;
+            match session {
+                Some(session) => {
+                    runner
+                        .listener_loop(
+                            tunnel_id,
+                            def,
+                            keepalive_secs,
+                            session,
+                            listener,
+                            cancel_rx,
+                            traffic,
+                        )
+                        .await;
+                }
+                None => {
+                    runner
+                        .local_listener_loop(tunnel_id, def, listener, cancel_rx, traffic)
+                        .await;
+                }
+            }
             // **必须摘除登记**：任务可能自己结束（会话丢、重试耗尽），
             // 不清理的话后续 start 会被开头那句 "contains_key 就返回" 挡掉。
             cleanup
@@ -243,6 +268,9 @@ impl TunnelRunner {
     ///
     /// 返回被顺带停掉的转发数量——界面要能说清"断一条隧道影响了几个端口"。
     pub async fn disconnect_session(&self, server_id: &str) -> Result<usize> {
+        if is_local(server_id) {
+            return Err(anyhow!("「本机」不允许断开：它没有经过 SSH，也就没有会话"));
+        }
         // 显式断开会显式停转发：这不是"掉线"，重连后不该被自动拉起来。
         self.paused.lock().expect("paused lock").remove(server_id);
         let session = self
@@ -317,6 +345,10 @@ impl TunnelRunner {
     /// 之前就"试一次、失败就再也不动"，用户看到的是"启用着却一直未连接"。
     /// 既然开关表示"我希望它连着"，那就该一直重试。
     pub fn ensure_keeper(self: &Arc<Self>, server_id: &str) {
+        // 本机不需要守护：没有会话会掉，也就没有重连这回事。
+        if is_local(server_id) {
+            return;
+        }
         let mut keepers = self.keepers.lock().expect("keepers lock");
         if keepers.contains_key(server_id) {
             return;
@@ -481,6 +513,10 @@ impl TunnelRunner {
             Err(e) => return vec![("".to_string(), e.to_string())],
         };
         for server_id in &enabled_servers {
+            // 本机恒为已连接：不必建会话，也没有守护可挂；它的转发照常按 auto_start 起来。
+            if is_local(server_id) {
+                continue;
+            }
             // 先试一次（快路径），无论成败都挂上守护：失败会按退避继续重试。
             if let Err(e) = self.connect_session(server_id).await {
                 failures.push((server_id.clone(), e.to_string()));
@@ -642,7 +678,7 @@ impl TunnelRunner {
 
             let (outcome, returned) = engine::serve_listener(
                 current,
-                Arc::clone(&session),
+                Upstream::Ssh(Arc::clone(&session)),
                 def.remote_host.clone(),
                 def.remote_port,
                 keepalive_secs,
@@ -710,6 +746,69 @@ impl TunnelRunner {
                     let _ = self.tunnels.apply(&id, engine::to_event(other));
                     return;
                 }
+            }
+        }
+    }
+
+    /// 本机转发的监听循环。
+    ///
+    /// 与 [`Self::listener_loop`] 的区别只有一件事：**没有会话可建、可断、可重连**。
+    /// 监听一绑上就是 `Running`；目标端口没开只影响那一次连接（由 `on_error` 记一句话），
+    /// 不进退避、也不把整条转发标红——本机程序重启的十几秒不该让用户以为转发坏了。
+    async fn local_listener_loop(
+        self: Arc<Self>,
+        id: String,
+        def: TunnelDto,
+        listener: TcpListener,
+        cancel: watch::Receiver<bool>,
+        traffic: std::sync::Arc<crate::models::tunnel::Traffic>,
+    ) {
+        // 本机的"握手"就是不握手：监听成功即视为连上。
+        let _ = self.tunnels.apply(&id, TunnelEvent::HandshakeOk);
+
+        let tunnels_for_error = Arc::clone(&self.tunnels);
+        let error_id = id.clone();
+        let on_error = Box::new(move |message: String| {
+            tunnels_for_error.set_last_error(&error_id, message);
+        });
+
+        // ② 需要本地 TLS 终止；构造失败时同样不允许退回明文。
+        let entry_tls = match build_entry_tls(self.gateway.as_ref(), &def) {
+            Ok(acceptor) => acceptor,
+            Err(message) => {
+                self.tunnels.set_last_error(&id, message);
+                let _ = self.tunnels.apply(&id, TunnelEvent::Stop);
+                return;
+            }
+        };
+
+        let domain = def.domain.trim();
+        let (outcome, _) = engine::serve_listener(
+            listener,
+            Upstream::Direct,
+            def.remote_host.clone(),
+            def.remote_port,
+            0,
+            cancel,
+            on_error,
+            traffic,
+            entry_tls,
+            if domain.is_empty() {
+                None
+            } else {
+                Some(domain.to_string())
+            },
+        )
+        .await;
+
+        match outcome {
+            engine::EngineOutcome::Stopped => {
+                let _ = self.tunnels.apply(&id, TunnelEvent::Stop);
+            }
+            other => {
+                // 没有会话可重建：监听出错就把原因留下并停下，不进退避。
+                self.tunnels.set_last_error(&id, engine::describe(&other));
+                let _ = self.tunnels.apply(&id, TunnelEvent::Stop);
             }
         }
     }
@@ -853,6 +952,125 @@ mod tests {
             forwards_to_resume(&items, "other").is_empty(),
             "别的隧道的转发不该被这条会话带起来"
         );
+    }
+
+    /// 本机转发必须能**不建任何 SSH 会话**直接起来，并真的把字节搬过去。
+    ///
+    /// 这条用例守的是最容易回归的那一点：`start()` 里只要有人把 `ensure_session`
+    /// 提前到分支之前，本机条目就会因为没有凭据而永远起不来。
+    #[tokio::test]
+    async fn local_forward_runs_without_any_ssh_session() {
+        use tl_protocol::{CreateTunnelRequest, ServerKind, TunnelState, LOCAL_SERVER_ID};
+
+        let dir =
+            std::env::temp_dir().join(format!("threadline-local-forward-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create dir");
+
+        let credentials = Arc::new(CredentialStore::new(dir.join("credentials.dat")));
+        let servers = Arc::new(ServerStore::new(
+            dir.join("servers.json"),
+            Arc::clone(&credentials),
+        ));
+        let tunnels = Arc::new(TunnelStore::new(
+            dir.join("tunnels.json"),
+            Arc::clone(&servers),
+        ));
+        let runner = Arc::new(TunnelRunner::new(
+            Arc::clone(&tunnels),
+            Arc::clone(&servers),
+            credentials,
+            None,
+        ));
+
+        assert_eq!(
+            servers.kind_of(LOCAL_SERVER_ID).expect("kind"),
+            ServerKind::Local
+        );
+
+        // 本机目标：一个回声服务
+        let target = TcpListener::bind("127.0.0.1:0").await.expect("target");
+        let target_port = target.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = target.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 256];
+                    while let Ok(n) = tokio::io::AsyncReadExt::read(&mut socket, &mut buf).await {
+                        if n == 0 {
+                            break;
+                        }
+                        if tokio::io::AsyncWriteExt::write_all(&mut socket, &buf[..n])
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+
+        // 入口端口：先绑一个随机端口再释放，拿到一个大概率空闲的号
+        let entry_port = {
+            let probe = TcpListener::bind("127.0.0.1:0").await.expect("probe");
+            probe.local_addr().expect("addr").port()
+        };
+
+        let created = tunnels
+            .create(CreateTunnelRequest {
+                name: "local-web".into(),
+                server_id: LOCAL_SERVER_ID.into(),
+                local_host: "127.0.0.1".into(),
+                local_port: entry_port,
+                remote_host: "127.0.0.1".into(),
+                remote_port: target_port,
+                auto_start: false,
+                note: String::new(),
+                open_path: String::new(),
+                scheme: "tcp".into(),
+                domain: String::new(),
+                remote_scheme: None,
+                icon: String::new(),
+                group: String::new(),
+                in_app: true,
+            })
+            .expect("create local tunnel");
+
+        runner
+            .start(&created.id)
+            .await
+            .expect("本机转发应当直接起来");
+
+        // 监听任务在自己的任务里推进状态：给它一点时间进入 Running。
+        let mut state = TunnelState::Stopped;
+        for _ in 0..50 {
+            state = tunnels.view(&created.id).expect("view").status.state;
+            if state == TunnelState::Running {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(state, TunnelState::Running, "本机转发绑上端口就是运行中");
+        assert!(runner.session_connected(LOCAL_SERVER_ID), "本机恒为已连接");
+
+        let mut client = tokio::net::TcpStream::connect(("127.0.0.1", entry_port))
+            .await
+            .expect("connect entry");
+        tokio::io::AsyncWriteExt::write_all(&mut client, b"ping")
+            .await
+            .expect("write");
+        let mut buf = [0u8; 4];
+        tokio::io::AsyncReadExt::read_exact(&mut client, &mut buf)
+            .await
+            .expect("read");
+        assert_eq!(&buf, b"ping", "字节要真的到本机端口再回来");
+
+        runner.stop(&created.id).await.expect("stop");
+        assert_eq!(
+            tunnels.view(&created.id).expect("view").status.state,
+            TunnelState::Stopped
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -301,7 +301,8 @@ const pressOffset = ref(0);
 const slotBounds = ref<number[]>([]);
 
 function openOrder() {
-  order.value = servers.servers.map((server) => server.id);
+  // 「本机」是内置条目，永远排在最前，不参与用户排序。
+  order.value = servers.servers.filter((server) => server.kind !== 'local').map((server) => server.id);
   orderOpen.value = true;
 }
 
@@ -313,7 +314,9 @@ watch(
   () => servers.servers.length,
   () => {
     if (orderOpen.value && order.value.length === 0 && servers.servers.length > 0) {
-      order.value = servers.servers.map((server) => server.id);
+      order.value = servers.servers
+        .filter((server) => server.kind !== 'local')
+        .map((server) => server.id);
     }
   },
 );
