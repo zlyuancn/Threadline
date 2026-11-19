@@ -2,6 +2,7 @@
 
 import { http } from './client';
 import { bootstrap } from './client';
+import { refreshBootstrap } from './native';
 import type {
   AcceptHostKeyRequest,
   AppGroup,
@@ -118,16 +119,22 @@ export const adminApi = {
   /**
    * 控制台：一条 WebSocket，服务端把 PTY 的输出直接推过来。
    *
-   * 令牌走 query——浏览器不能给 WebSocket 设请求头。核心只对 `/console`
-   * 这条路开这个口子（见 `interface/auth.rs` 的 `console_query_token`）。
+   * 令牌走 query——浏览器不能给 WebSocket 设请求头。核心只对两条 WS 路由
+   * （`/console` 与 `/admin/terminal`）开这个口子，见 `interface/auth.rs` 的
+   * `pty_query_token`。
+   *
+   * **先刷一次 bootstrap**：核心每次启动都轮换 token，而 WS 握手不走 http
+   * 客户端的 401 重试；不刷就会在核心重启后第一次连接撞 401，被误报成
+   * 「连不上核心」。
    */
-  openConsole: (
+  openConsole: async (
     id: string,
     cid: string,
     mode: ConsoleMode,
     cols: number,
     rows: number,
-  ): WebSocket => {
+  ): Promise<WebSocket> => {
+    await refreshBootstrap();
     const { baseUrl, token } = bootstrap();
     const origin = baseUrl || window.location.origin;
     const url = new URL(
@@ -135,6 +142,23 @@ export const adminApi = {
     );
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     url.searchParams.set('mode', mode);
+    url.searchParams.set('cols', String(cols));
+    url.searchParams.set('rows', String(rows));
+    if (token) url.searchParams.set('token', token);
+    return new WebSocket(url.toString());
+  },
+
+  /**
+   * 服务器终端：同上一条，只是进的是登录 shell 而不是容器。
+   *
+   * 命令由核心给（`server_admin::login_shell_command`），这里不传。
+   */
+  openServerTerminal: async (id: string, cols: number, rows: number): Promise<WebSocket> => {
+    await refreshBootstrap();
+    const { baseUrl, token } = bootstrap();
+    const origin = baseUrl || window.location.origin;
+    const url = new URL(`${origin}/api/v1/servers/${encodeURIComponent(id)}/admin/terminal`);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     url.searchParams.set('cols', String(cols));
     url.searchParams.set('rows', String(rows));
     if (token) url.searchParams.set('token', token);

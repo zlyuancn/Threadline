@@ -19,6 +19,7 @@ use tl_protocol::{
 };
 
 use super::parse::split_sections;
+use super::shell::pick_shell;
 
 /// 写操作的预算：`stop` 默认 10s 超时，留一倍余量。
 pub const ACTION_BUDGET: Duration = Duration::from_secs(20);
@@ -210,18 +211,16 @@ impl ConsoleMode {
     }
 }
 
-/// 远端挑 shell：bash 在就用 bash，否则退回 sh。
-///
-/// 用双引号而不是单引号——整段命令由 SSH 直接 exec，外层不套 `sh -c '...'`，
-/// 但保持「脚本正文无单引号」的习惯，免得以后被复制到别处踩坑。
-const PICK_SHELL: &str = "sh -c \"command -v bash >/dev/null 2>&1 && exec bash || exec sh\"";
-
 /// 控制台命令。`cid` 必须是已核对的容器名。
+///
+/// shell 的选择走兄弟模块 `shell::pick_shell(false)`（非登录 shell）：容器里没有
+/// profile 可读，`-l` 只会多跑一遍登录脚本。规则本身只维护一份，见 `shell.rs`。
 pub fn console_command(mode: ConsoleMode, cid: &str) -> Result<String, String> {
     validate_cid(cid)?;
+    let shell = pick_shell(false);
     Ok(match mode {
-        ConsoleMode::Exec => format!("docker exec -it {cid} {PICK_SHELL}"),
-        ConsoleMode::Root => format!("docker exec -it -u root {cid} {PICK_SHELL}"),
+        ConsoleMode::Exec => format!("docker exec -it {cid} {shell}"),
+        ConsoleMode::Root => format!("docker exec -it -u root {cid} {shell}"),
         // `--rm` + 别的容器命名空间：退出即销毁，不留下一个「调试图容器」。
         ConsoleMode::Debug => format!(
             "docker run --rm -it --pid=container:{cid} --net=container:{cid} --volumes-from {cid} busybox sh"

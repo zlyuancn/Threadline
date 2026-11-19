@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clockText, formatBytes, formatKb, formatUptime, levelClass, percent, rateText, usagePercent } from './serverAdmin';
+import { clockText, formatBytes, formatKb, formatUptime, levelClass, percent, pickableServers, rateText, usagePercent } from './serverAdmin';
 
 describe('formatBytes', () => {
   it('keeps bytes as integers', () => {
@@ -75,5 +75,32 @@ describe('clockText', () => {
 
   it('returns the input when unparsable', () => {
     expect(clockText('not-a-date')).toBe('not-a-date');
+  });
+});
+
+describe('pickableServers', () => {
+  const servers = [
+    { id: 'deva', name: 'deva', host: '192.168.28.98' },
+    { id: 'local', name: '本机', host: '127.0.0.1', kind: 'local' },
+    { id: 'devb', name: 'devb', host: '10.0.0.5' },
+  ];
+
+  it('drops the built-in local entry', () => {
+    expect(pickableServers(servers).map((s) => s.id)).toEqual(['deva', 'devb']);
+  });
+
+  it('keeps the caller order given by the sidebar', () => {
+    const reordered = [servers[2], servers[0], servers[1]];
+    expect(pickableServers(reordered).map((s) => s.id)).toEqual(['devb', 'deva']);
+  });
+
+  it('filters by name or host, ignoring case and surrounding spaces', () => {
+    expect(pickableServers(servers, ' DEV ').map((s) => s.id)).toEqual(['deva', 'devb']);
+    expect(pickableServers(servers, '10.0.0').map((s) => s.id)).toEqual(['devb']);
+    expect(pickableServers(servers, '192.168').map((s) => s.id)).toEqual(['deva']);
+  });
+
+  it('returns every ssh server for a blank keyword', () => {
+    expect(pickableServers(servers, '   ').map((s) => s.id)).toEqual(['deva', 'devb']);
   });
 });

@@ -202,3 +202,24 @@ export function clockText(iso: string): string {
   }
   return date.toLocaleTimeString('zh-CN', { hour12: false });
 }
+
+/**
+ * 页头切换器的可选项：剔除「本机」（没有会话，管理页对它没意义），
+ * 再按名称或 host 过滤。关键词去空格、忽略大小写。
+ *
+ * 顺序不动：侧栏是用户自己排的序，管理页里换机器时也该是同一个顺序。
+ */
+export function pickableServers<T extends { name: string; host: string; kind?: string }>(
+  servers: T[],
+  keyword = '',
+): T[] {
+  const term = keyword.trim().toLowerCase();
+  return servers
+    .filter((server) => server.kind !== 'local')
+    .filter(
+      (server) =>
+        !term ||
+        server.name.toLowerCase().includes(term) ||
+        server.host.toLowerCase().includes(term),
+    );
+}

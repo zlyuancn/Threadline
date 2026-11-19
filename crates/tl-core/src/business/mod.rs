@@ -216,6 +216,18 @@ impl Services {
         .await
     }
 
+    /// 开一条服务器登录 shell：返回 PTY 通道与实际执行的命令。
+    ///
+    /// 不做互斥：SSH shell 各自独立 PTY，两条会话不会串输入。
+    pub async fn server_terminal(
+        &self,
+        server_id: &str,
+        cols: u32,
+        rows: u32,
+    ) -> Result<(crate::models::tunnel::engine::PtyChannel, String)> {
+        admin::server_terminal(&self.servers, &self.runner, server_id, cols, rows).await
+    }
+
     /// 应用页分组清单（含自动收录的组与空组）。
     pub fn app_groups(&self) -> Result<AppGroupList> {
         self.tunnels.app_groups()

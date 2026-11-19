@@ -6,12 +6,16 @@
 //!
 //! 纪律：
 //! - **无状态**：不落盘、不缓存，每次请求现采现解析（会话归 `tunnel`，本模型不持有）；
-//! - **只读**：脚本里没有写操作，写操作类模块（进程结束、文件删除、防火墙）另立契约；
+//! - **采集只读**：概览 / 容器等采集脚本里没有写操作，写操作类模块（进程结束、文件删除、
+//!   防火墙）另立契约；**终端例外**——它是用户自己的交互通道（用户能敲任何命令），
+//!   不属于"核心替用户写远端"；
 //! - **不假装能用**：未实现模块在清单里标 `Planned`，界面据此显示"规划中"。
 
 pub mod collect;
 pub mod containers;
 pub mod parse;
+pub mod shell;
+pub mod terminal;
 
 use tl_protocol::{AdminModule, AdminModuleState, ContainerSummary};
 
@@ -23,6 +27,7 @@ pub use containers::{
     stats_script, validate_cid, ConsoleMode, ACTION_BUDGET, STATS_BUDGET,
 };
 pub use parse::{interpret, interpret_with, split_sections, Extras, ParsedOverview};
+pub use terminal::login_shell_command;
 
 /// 概览采集脚本（一次往返）。
 ///
@@ -44,6 +49,8 @@ pub fn modules(containers: &ContainerSummary) -> Vec<AdminModule> {
         note: Some(note.to_string()),
     };
 
+    // 顺序即导航顺序（2026-11-19 拍板：概览 / 终端 / 文件 / 容器 / 虚拟机 /
+    // 进程 / 网络 / 防火墙 / 服务 / 日志）。进机器就要用的靠前，写操作类靠后。
     vec![
         module(
             "overview",
@@ -52,10 +59,16 @@ pub fn modules(containers: &ContainerSummary) -> Vec<AdminModule> {
             "系统信息与实时指标（一次采集）",
         ),
         module(
-            "processes",
-            "进程管理",
+            "terminal",
+            "终端",
+            AdminModuleState::Ready,
+            "登录 shell（bash 优先），离开管理页即断开",
+        ),
+        module(
+            "files",
+            "文件管理",
             AdminModuleState::Planned,
-            "全量进程、按 CPU/内存排序、结束进程",
+            "目录浏览、上传下载、删除与重命名（SFTP）",
         ),
         // 容器模块已实现：有引擎就是 Ready，没引擎仍是 Unavailable（不是"规划中"）。
         module(
@@ -80,16 +93,10 @@ pub fn modules(containers: &ContainerSummary) -> Vec<AdminModule> {
             "virsh 列表、启停与串口控制台（后续开发）",
         ),
         module(
-            "files",
-            "文件管理",
+            "processes",
+            "进程管理",
             AdminModuleState::Planned,
-            "目录浏览、上传下载、删除与重命名（SFTP）",
-        ),
-        module(
-            "terminal",
-            "终端",
-            AdminModuleState::Planned,
-            "浏览器内的交互式 shell",
+            "全量进程、按 CPU/内存排序、结束进程",
         ),
         module(
             "network",
@@ -168,6 +175,31 @@ mod tests {
         assert_eq!(modules[at("vms")].state, AdminModuleState::Planned);
         // 侧边栏顺序：虚拟机紧跟在容器管理后面
         assert_eq!(at("vms"), at("containers") + 1);
+    }
+
+    /// 导航顺序是拍板过的（2026-11-19）：概览 / 终端 / 文件 / 容器 / 虚拟机 /
+    /// 进程 / 网络 / 防火墙 / 服务 / 日志。
+    ///
+    /// 清单由核心给、前端只按序渲染，所以这条断言就是"侧边栏长什么样"的唯一防线。
+    #[test]
+    fn module_order_matches_the_agreed_navigation() {
+        let modules = modules(&ContainerSummary::default());
+        let ids: Vec<&str> = modules.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "overview",
+                "terminal",
+                "files",
+                "containers",
+                "vms",
+                "processes",
+                "network",
+                "firewall",
+                "services",
+                "logs",
+            ]
+        );
     }
 
     #[test]

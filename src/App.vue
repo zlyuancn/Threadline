@@ -818,6 +818,7 @@ onUnmounted(() => {
         <ServerAdminView
           v-else-if="tab === 'admin'"
           :server-id="adminServerId"
+          @switch-server="adminServerId = $event"
           @back="tab = 'forwards'"
         />
         <div v-else class="padded">

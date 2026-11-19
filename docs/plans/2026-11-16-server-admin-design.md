@@ -25,7 +25,7 @@
 | P1 | `overview` 概览 | 系统信息、CPU、内存/Swap、负载、磁盘、网络流量、磁盘 IO、Top 进程、容器简况 | ✅ 完整 |
 | P2 | `processes` 进程管理 | 全量进程列表、排序、结束进程（需确认） | 占位 |
 | P2 | `files` 文件管理 | 目录浏览、下载、上传、删除、重命名（SFTP 子系统） | 占位 |
-| P2 | `terminal` 终端 | PTY + 交互式 shell（`request_pty` + 双向 channel），前端需 xterm.js | 占位 |
+| P2 | `terminal` 终端 | PTY + 交互式 shell（`request_pty` + 双向 channel），前端需 xterm.js | ✅ 完整（2026-11-19，见 `2026-11-19-server-terminal-design.md`） |
 | P3 | `containers` 容器管理 | docker/podman 列表、启停、日志 | 概览里只给汇总，管理页占位 |
 | P3 | `network` 网络管理 | 网卡、路由、监听端口、DNS | 占位 |
 | P3 | `firewall` 防火墙 | ufw / firewalld / iptables 规则查看与开关 | 占位 |

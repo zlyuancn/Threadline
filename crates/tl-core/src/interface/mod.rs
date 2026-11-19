@@ -30,11 +30,12 @@ use tl_protocol::{
     SetServerEnabledRequest, ShutdownAccepted, TunnelList, TunnelView, WhoamiResponse, API_PREFIX,
 };
 
+use crate::business::admin::ConsoleGuard;
 use crate::business::Services;
 use crate::foundation::{registry, token as token_gen};
 use crate::models::runtime::AutostartError;
 use crate::models::server_admin::ConsoleMode;
-use crate::models::tunnel::engine::{PtyCommand, PtyEvent};
+use crate::models::tunnel::engine::{PtyChannel, PtyCommand, PtyEvent};
 
 use error::ApiFailure;
 
@@ -173,6 +174,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             &format!("{API_PREFIX}/servers/{{id}}/admin/containers/{{cid}}/console"),
             get(server_container_console),
+        )
+        // 服务器终端：同样是 WS（登录 shell），与容器控制台共用一条桥。
+        .route(
+            &format!("{API_PREFIX}/servers/{{id}}/admin/terminal"),
+            get(server_terminal),
         )
         // 放在顶层而不是 /servers 下：`/servers/{id}` 是动态段，同层级再加一个
         // 静态段会被它抢走（表现为 405 Method Not Allowed）。
@@ -626,7 +632,7 @@ async fn server_container_console(
 }
 
 async fn console_loop(
-    mut socket: WebSocket,
+    socket: WebSocket,
     state: Arc<AppState>,
     server_id: String,
     cid: String,
@@ -638,12 +644,28 @@ async fn console_loop(
     let opened = state
         .services
         .container_console(&server_id, &cid, mode, cols, rows)
-        .await;
+        .await
+        .map(|(pty, command, guard)| (pty, command, Some(guard)))
+        .map_err(|error| format!("{error:#}"));
 
+    pty_bridge(socket, opened, mode.as_str()).await;
+}
+
+/// PTY ↔ WebSocket 的双向桥。
+///
+/// 容器控制台与服务器终端只差"怎么打开"和 hello 帧的 mode；收发循环与退出清理
+/// 必须只有一份——抄第二份迟早会在"断开后远端进程还在"上分叉。
+///
+/// `opened` 的第三项是容器控制台的占用凭据，在本函数里持有到结束：
+/// 与改造前 `console_loop` 里的 `_guard` 普通绑定等价，互斥不会提前释放或泄漏。
+async fn pty_bridge(
+    mut socket: WebSocket,
+    opened: Result<(PtyChannel, String, Option<ConsoleGuard>), String>,
+    mode_label: &'static str,
+) {
     let (pty, command, _guard) = match opened {
         Ok(parts) => parts,
-        Err(error) => {
-            let message = format!("{error:#}");
+        Err(message) => {
             let _ = send_frame(&mut socket, &ServerFrame::Error { message: &message }).await;
             let _ = socket.send(Message::Close(None)).await;
             return;
@@ -652,7 +674,7 @@ async fn console_loop(
 
     let hello = ServerFrame::Hello {
         command: &command,
-        mode: mode.as_str(),
+        mode: mode_label,
     };
     if send_frame(&mut socket, &hello).await.is_err() {
         return;
@@ -717,6 +739,38 @@ async fn console_loop(
     drop(command_tx);
     let _ = pump.await;
     let _ = socket.send(Message::Close(None)).await;
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TerminalQuery {
+    #[serde(default)]
+    cols: Option<u32>,
+    #[serde(default)]
+    rows: Option<u32>,
+}
+
+/// 服务器终端：一条 WS 直连登录 shell。
+///
+/// 没有需要报 400 的参数（尺寸都夹在允许区间内），打开失败一律走 `error` 帧；
+/// 命令由核心给（`server_admin::login_shell_command`），前端不传。
+async fn server_terminal(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<TerminalQuery>,
+) -> Response {
+    let cols = clamp_cols(query.cols.unwrap_or(100));
+    let rows = clamp_rows(query.rows.unwrap_or(30));
+
+    ws.on_upgrade(move |socket| async move {
+        let opened = state
+            .services
+            .server_terminal(&id, cols, rows)
+            .await
+            .map(|(pty, command)| (pty, command, None))
+            .map_err(|error| format!("{error:#}"));
+        pty_bridge(socket, opened, "shell").await;
+    })
 }
 
 /// 保存前试连：拿请求里的表单值探一次，不落库。
@@ -1688,6 +1742,44 @@ mod tests {
             .oneshot(
                 axum::http::Request::builder()
                     .uri("/api/v1/servers/s1/admin/containers/web/console?mode=exec&token=token")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("call");
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "过了鉴权后应当由 WS 提取器报「不是升级请求」"
+        );
+    }
+
+    /// 服务器终端的鉴权：与容器控制台同一条规矩。
+    ///
+    /// 必须测路由而不是只测 `pty_query_token`：路由万一挂到 public 上，
+    /// 函数级测试照样全绿，而这条 WS 就完全裸奔了。
+    #[tokio::test]
+    async fn terminal_route_accepts_query_token_only_with_token() {
+        use tower::ServiceExt;
+
+        let app = test_app();
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/servers/s1/admin/terminal")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("call");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/servers/s1/admin/terminal?token=token")
                     .body(axum::body::Body::empty())
                     .expect("request"),
             )

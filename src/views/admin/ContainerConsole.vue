@@ -132,7 +132,7 @@ async function connect(): Promise<void> {
   const cols = Math.max(20, instance.cols || 100);
   const rows = Math.max(5, instance.rows || 30);
 
-  const ws = adminApi.openConsole(props.serverId, props.containerName, mode.value, cols, rows);
+  const ws = await adminApi.openConsole(props.serverId, props.containerName, mode.value, cols, rows);
   ws.binaryType = 'arraybuffer';
   socket = ws;
 

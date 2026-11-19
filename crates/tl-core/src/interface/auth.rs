@@ -26,11 +26,11 @@ pub async fn require_token(
 
     let from_header = header.strip_prefix("Bearer ").unwrap_or_default();
 
-    // 浏览器不能给 WebSocket 设请求头，所以控制台那条只能用 query 带令牌。
-    // **只对 `/console` 开这个口子**：其余端点仍必须走 Authorization，
-    // 免得令牌以 query 的形式散落到各处日志里。
+    // 浏览器不能给 WebSocket 设请求头，所以两条 WS 路由只能用 query 带令牌。
+    // **只对 `/console` 与 `/admin/terminal` 开这个口子**：其余端点仍必须走
+    // Authorization，免得令牌以 query 的形式散落到各处日志里。
     let provided = if from_header.is_empty() {
-        console_query_token(&request).unwrap_or_default()
+        pty_query_token(&request).unwrap_or_default()
     } else {
         from_header.to_string()
     };
@@ -42,12 +42,21 @@ pub async fn require_token(
     Ok(next.run(request).await)
 }
 
-/// 从 `?token=` 取令牌，**仅限容器控制台那条路由**。
+/// 只有这两条 WS 路由吃 `?token=`：容器控制台 `/admin/containers/{cid}/console`、
+/// 服务器终端 `/admin/terminal`。
+///
+/// 用后缀比对而不是前缀：`/admin/terminals` 这类路径不在路由表里，
+/// 也不该因为长度相似被放行。
+fn is_pty_route(path: &str) -> bool {
+    path.ends_with("/console") || path.ends_with("/admin/terminal")
+}
+
+/// 从 `?token=` 取令牌，**仅限上面两条 WS 路由**。
 ///
 /// 不做百分号解码：核心签发的令牌是十六进制串，不含需要转义的字符；
 /// 真出现别的字符，比较自然会失败，而不是被解码成另一个令牌。
-fn console_query_token(request: &Request) -> Option<String> {
-    if !request.uri().path().ends_with("/console") {
+fn pty_query_token(request: &Request) -> Option<String> {
+    if !is_pty_route(request.uri().path()) {
         return None;
     }
     request
@@ -99,13 +108,20 @@ mod tests {
     }
 
     #[test]
-    fn query_token_is_accepted_for_console_only() {
+    fn query_token_is_accepted_for_pty_routes_only() {
         let console =
             request("/api/v1/servers/s1/admin/containers/web/console?mode=exec&token=abc");
-        assert_eq!(console_query_token(&console).as_deref(), Some("abc"));
+        assert_eq!(pty_query_token(&console).as_deref(), Some("abc"));
+
+        let terminal = request("/api/v1/servers/s1/admin/terminal?cols=100&token=abc");
+        assert_eq!(pty_query_token(&terminal).as_deref(), Some("abc"));
 
         // 其余路由不吃 query 令牌：令牌不该顺着 URL 散到各处日志里
         let list = request("/api/v1/servers/s1/admin/containers?token=abc");
-        assert_eq!(console_query_token(&list), None);
+        assert_eq!(pty_query_token(&list), None);
+
+        // 后缀比对的边界：`terminals` 不是终端路由
+        let plural = request("/api/v1/servers/s1/admin/terminals?token=abc");
+        assert_eq!(pty_query_token(&plural), None);
     }
 }

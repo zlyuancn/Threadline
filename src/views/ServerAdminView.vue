@@ -4,23 +4,31 @@
 // 边界：这一页**只展示核心采到的数据**，自己不调 fetch、不算指标口径；
 // 未实现的模块只显示"规划中 + 将做什么"，不放半成品按钮。
 
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue';
 import { onWindowFocusChange } from '../api/native';
 import RingGauge from '../components/RingGauge.vue';
 import Sparkline from '../components/Sparkline.vue';
 import ContainersPanel from './admin/ContainersPanel.vue';
+
+// xterm 约 74 kB（gzip）：只有真的进「终端」才该下载它
+const TerminalPanel = defineAsyncComponent(() => import('./admin/TerminalPanel.vue'));
 import { useServersStore } from '../models/servers';
 import {
   clockText,
   formatKb,
   formatUptime,
+  pickableServers,
   rateText,
   usagePercent,
   useServerAdminStore,
 } from '../models/serverAdmin';
 
 const props = defineProps<{ serverId: string }>();
-const emit = defineEmits<{ (e: 'back'): void }>();
+const emit = defineEmits<{
+  (e: 'back'): void;
+  /** 页头下拉选了另一台：id 的唯一真相在 App.vue，这里只上报。 */
+  (e: 'switch-server', id: string): void;
+}>();
 
 const servers = useServersStore();
 const admin = useServerAdminStore();
@@ -30,6 +38,71 @@ const active = ref('overview');
 const server = computed(() => servers.servers.find((s) => s.id === props.serverId) ?? null);
 const overview = computed(() => admin.overview);
 const activeModule = computed(() => admin.modules.find((m) => m.id === active.value) ?? null);
+
+/**
+ * 终端面板**首次进入后就常驻**（只切 `v-show`）。
+ *
+ * 用 `v-if` 跟着 `active` 走的话，切到「概览」就等于卸载面板 → `teardown()`
+ * → 远端 shell 退出，用户切回来还得重连。会话要活到离开管理页为止。
+ */
+const terminalMounted = ref(false);
+watch(active, (id) => {
+  if (id === 'terminal') terminalMounted.value = true;
+});
+
+/** 有独立组件的模块都在这里；其余走「规划中」占位。 */
+const isPlaceholder = computed(
+  () => !['overview', 'containers', 'terminal'].includes(active.value),
+);
+
+/** 概览既没数据也不在加载/报错：给一句提示，而不是空白页。 */
+const showEmpty = computed(
+  () =>
+    active.value === 'overview' && !overview.value && !admin.error && !admin.loading,
+);
+
+/* ───────────────────── 页头：切换服务器 ───────────────────── */
+
+const pickerOpen = ref(false);
+const keyword = ref('');
+const idBox = ref<HTMLElement | null>(null);
+
+/** 超过 6 台才给过滤框：只有两台机器时多一个输入框纯属噪音。 */
+const showFilter = computed(() => servers.servers.length > 6);
+const serverOptions = computed(() => pickableServers(servers.servers, keyword.value));
+
+function togglePicker(): void {
+  pickerOpen.value = !pickerOpen.value;
+  if (pickerOpen.value) keyword.value = '';
+}
+
+function closePicker(): void {
+  pickerOpen.value = false;
+}
+
+/** 与侧栏卡片同一套三态：已连接 / 已知未连接 / 还没查到。 */
+function sessionDot(id: string): string {
+  if (!servers.sessionKnownOf(id)) return 'is-warn';
+  return servers.sessionConnected(id) ? 'is-on' : '';
+}
+
+function chooseServer(id: string): void {
+  closePicker();
+  // 选中的就是当前这台：不发事件，免得白白重采一次
+  if (id !== props.serverId) emit('switch-server', id);
+}
+
+/** 点浮层外面关掉；点服务器名本身不关（由按钮的 toggle 负责）。 */
+function onPointerDown(event: PointerEvent): void {
+  if (!pickerOpen.value) return;
+  const box = idBox.value;
+  if (box && event.target instanceof Node && box.contains(event.target)) return;
+  closePicker();
+}
+
+function onKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && pickerOpen.value) closePicker();
+}
 
 /** 内存占比：用「已用 / 总量」，与核心给的 used_kb 口径一致。 */
 const memoryPercent = computed(() =>
@@ -270,6 +343,9 @@ watch(() => props.serverId, load);
 
 onMounted(async () => {
   document.addEventListener('visibilitychange', onVisibility);
+  // 下拉：点外面或按 Esc 关掉
+  document.addEventListener('pointerdown', onPointerDown);
+  document.addEventListener('keydown', onKeydown);
   // 面板被热键收起、最小化、切到别的程序：立刻停采。
   unlistenFocus = await onWindowFocusChange((focused) => {
     windowFocused.value = focused;
@@ -284,6 +360,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('visibilitychange', onVisibility);
+  document.removeEventListener('pointerdown', onPointerDown);
+  document.removeEventListener('keydown', onKeydown);
   unlistenFocus?.();
   unlistenFocus = undefined;
   stopTimers();
@@ -480,10 +558,73 @@ const systemRows = computed(() => {
       <button class="icon-btn" title="返回隧道" @click="emit('back')">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 3.5L5 8l4.5 4.5"/></svg>
       </button>
-      <div class="admin-id">
-        <div class="admin-title">{{ server?.name || '服务器管理' }}</div>
-        <div class="admin-sub mono">
-          {{ server ? `${server.username}@${server.host}:${server.port}` : serverId }}
+      <div ref="idBox" class="admin-id">
+        <button
+          class="admin-id-btn"
+          title="切换服务器"
+          :aria-expanded="pickerOpen"
+          aria-haspopup="listbox"
+          @click="togglePicker"
+        >
+          <span class="admin-id-text">
+            <span class="admin-title">{{ server?.name || '服务器管理' }}</span>
+            <span class="admin-sub mono">
+              {{ server ? `${server.username}@${server.host}:${server.port}` : serverId }}
+            </span>
+          </span>
+          <svg
+            class="admin-id-chev"
+            :class="{ 'is-open': pickerOpen }"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M4 6.5L8 10.5L12 6.5" />
+          </svg>
+        </button>
+
+        <!-- 换机器不离开管理页：左侧导航与当前模块都保持不变，只换数据源 -->
+        <div v-if="pickerOpen" class="admin-picker" role="listbox" aria-label="切换服务器">
+          <input
+            v-if="showFilter"
+            v-model="keyword"
+            class="admin-picker-filter"
+            placeholder="按名称或地址过滤"
+            @keydown.esc.stop="closePicker"
+          />
+          <button
+            v-for="item in serverOptions"
+            :key="item.id"
+            class="admin-picker-item"
+            :class="{ 'is-current': item.id === serverId }"
+            role="option"
+            :aria-selected="item.id === serverId"
+            @click="chooseServer(item.id)"
+          >
+            <span class="dot admin-picker-dot" :class="sessionDot(item.id)" />
+            <span class="admin-picker-main">
+              <span class="admin-picker-name">{{ item.name }}</span>
+              <span class="admin-picker-addr mono">
+                {{ item.username }}@{{ item.host }}:{{ item.port }}
+              </span>
+            </span>
+            <svg
+              v-if="item.id === serverId"
+              class="admin-picker-check"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M3.5 8.5L6.5 11.5L12.5 5" />
+            </svg>
+          </button>
+          <div v-if="!serverOptions.length" class="admin-picker-empty">没有匹配的服务器</div>
         </div>
       </div>
       <span class="spacer" />
@@ -520,26 +661,29 @@ const systemRows = computed(() => {
         <div v-if="!admin.modules.length" class="admin-nav-empty">清单加载中…</div>
       </nav>
 
-      <section class="admin-main">
-        <div v-if="admin.error" class="admin-error">
+      <section class="admin-main" :class="{ 'is-terminal': active === 'terminal' }">
+        <!--
+          三态只属于概览模块。以前它们包住了全部模块，于是在终端页点一次「刷新」
+          把概览打挂，整个分支被替换成「采集失败」块 → 终端面板卸载、会话断开。
+        -->
+        <div v-if="active === 'overview' && admin.error" class="admin-error">
           <div class="admin-error-title">采集失败</div>
           <p class="admin-error-body">{{ admin.error }}</p>
           <button class="btn is-primary" :disabled="admin.loading" @click="load">重试</button>
         </div>
 
-        <div v-else-if="admin.loading && !overview" class="admin-loading">
+        <div v-else-if="active === 'overview' && admin.loading && !overview" class="admin-loading">
           正在通过这条隧道的会话采集系统信息…
         </div>
 
-        <template v-else-if="overview">
+        <template v-else-if="active === 'overview' && overview">
           <div v-if="admin.degraded.length" class="admin-degraded">
             <span class="admin-degraded-k">部分数据缺失</span>
             <span v-for="item in admin.degraded" :key="item" class="pill is-warn">{{ item }}</span>
           </div>
 
           <!-- ── 概览 ─────────────────────────────────────── -->
-          <template v-if="active === 'overview'">
-            <!-- 系统信息：一眼看清"这是哪台机器、什么系统、开了多久" -->
+          <!-- 系统信息：一眼看清"这是哪台机器、什么系统、开了多久" -->
             <section class="panel admin-sys">
               <h3 class="panel-title">系统信息</h3>
               <dl class="admin-sys-list">
@@ -687,24 +831,37 @@ const systemRows = computed(() => {
               </section>
             </div>
 
-          </template>
-
-          <!-- ── 容器管理 ─────────────────────────────────── -->
-          <ContainersPanel v-else-if="active === 'containers'" :server-id="serverId" />
-
-          <!-- ── 未实现的模块：说清"规划中"，不给半成品按钮 ── -->
-          <section v-else class="panel admin-placeholder">
-            <div class="admin-placeholder-title">{{ activeModule?.title || active }}</div>
-            <p class="admin-placeholder-note">{{ activeModule?.note || '这个模块还在规划中。' }}</p>
-            <p class="hint">
-              位置已经留好：核心的模块清单里已有这一项，接口前缀
-              <code>/api/v1/servers/{id}/admin/</code>
-              也已划定，实现后这一页直接换成本模块的界面。
-            </p>
-          </section>
         </template>
 
-        <div v-else class="admin-empty">没有数据。点右上角「刷新」重新采集。</div>
+        <!-- ── 容器管理 ─────────────────────────────────── -->
+        <ContainersPanel v-if="active === 'containers'" :server-id="serverId" />
+
+        <!-- ── 终端 ─────────────────────────────────────── -->
+        <!--
+          不参与上面的 v-if 链：`v-if` 只负责"第一次进终端才挂载"，
+          之后靠 `v-show` 隐藏——切模块不断会话，返回隧道页（父级卸载）才断开。
+          `:key` 保证换服务器时重建：旧 shell 退出，新 shell 建立。
+        -->
+        <TerminalPanel
+          v-if="terminalMounted"
+          v-show="active === 'terminal'"
+          :key="serverId"
+          :server-id="serverId"
+          :visible="active === 'terminal'"
+        />
+
+        <!-- ── 未实现的模块：说清"规划中"，不给半成品按钮 ── -->
+        <section v-if="isPlaceholder" class="panel admin-placeholder">
+          <div class="admin-placeholder-title">{{ activeModule?.title || active }}</div>
+          <p class="admin-placeholder-note">{{ activeModule?.note || '这个模块还在规划中。' }}</p>
+          <p class="hint">
+            位置已经留好：核心的模块清单里已有这一项，接口前缀
+            <code>/api/v1/servers/{id}/admin/</code>
+            也已划定，实现后这一页直接换成本模块的界面。
+          </p>
+        </section>
+
+        <div v-if="showEmpty" class="admin-empty">没有数据。点右上角「刷新」重新采集。</div>
       </section>
     </div>
   </div>

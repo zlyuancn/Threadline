@@ -45,15 +45,8 @@ pub async fn overview(
     probe: Probe,
 ) -> Result<ServerOverview> {
     // 先确认隧道存在：不存在的 id 会被 `ensure_session` 报成"连不上"，把错误藏起来。
-    if !servers.list()?.items.iter().any(|s| s.id == server_id) {
-        return Err(anyhow!("隧道不存在：{server_id}"));
-    }
-
     let started = Instant::now();
-    let session: SessionHandle = runner
-        .session_handle(server_id)
-        .await
-        .map_err(|e| anyhow!(e.to_string()))?;
+    let session: SessionHandle = admin_session(servers, runner, server_id).await?;
 
     let script = server_admin::overview_script(probe);
     let capture = engine::exec_capture(&session, &script, EXEC_BUDGET)
@@ -149,10 +142,10 @@ pub async fn overview(
 
 // ─────────────────────── 容器管理 ───────────────────────
 
-/// 容器请求的公共前缀：确认隧道存在 → 取它的会话。
+/// 管理页请求的公共前缀（概览 / 容器 / 终端共用）：确认隧道存在 → 取它的会话。
 ///
 /// 不存在的 id 会被 `ensure_session` 报成「连不上」，把真正的错误藏起来。
-async fn container_session(
+async fn admin_session(
     servers: &ServerStore,
     runner: &Arc<TunnelRunner>,
     server_id: &str,
@@ -201,7 +194,7 @@ pub async fn containers(
     server_id: &str,
 ) -> Result<ContainerList> {
     let started = Instant::now();
-    let session = container_session(servers, runner, server_id).await?;
+    let session = admin_session(servers, runner, server_id).await?;
     let capture = container_exec(&session, server_admin::list_script(), EXEC_BUDGET).await?;
 
     let mut list = server_admin::parse_list(&capture.stdout);
@@ -218,7 +211,7 @@ pub async fn container_stats(
     runner: &Arc<TunnelRunner>,
     server_id: &str,
 ) -> Result<Vec<ContainerStats>> {
-    let session = container_session(servers, runner, server_id).await?;
+    let session = admin_session(servers, runner, server_id).await?;
     let capture = container_exec(&session, server_admin::stats_script(), STATS_BUDGET).await?;
     Ok(server_admin::parse_stats(&capture.stdout))
 }
@@ -232,7 +225,7 @@ pub async fn container_detail(
 ) -> Result<ContainerDetail> {
     server_admin::validate_cid(cid).map_err(|e| anyhow!("{e}"))?;
 
-    let session = container_session(servers, runner, server_id).await?;
+    let session = admin_session(servers, runner, server_id).await?;
     let script = server_admin::detail_script(cid).map_err(|e| anyhow!("{e}"))?;
     let capture = container_exec(&session, script, EXEC_BUDGET).await?;
 
@@ -260,7 +253,7 @@ pub async fn container_logs(
     tail: usize,
     since: Option<&str>,
 ) -> Result<ContainerLogs> {
-    let session = container_session(servers, runner, server_id).await?;
+    let session = admin_session(servers, runner, server_id).await?;
     let script = server_admin::logs_script(cid, tail, since).map_err(|e| anyhow!("{e}"))?;
     let capture = container_exec(&session, script, EXEC_BUDGET).await?;
     Ok(server_admin::parse_logs(&capture.stdout, tail))
@@ -293,7 +286,7 @@ pub async fn container_action(
         ));
     }
 
-    let session = container_session(servers, runner, server_id).await?;
+    let session = admin_session(servers, runner, server_id).await?;
     let script = server_admin::action_script(action, &name).map_err(|e| anyhow!("{e}"))?;
     let capture = container_exec(&session, script, ACTION_BUDGET).await?;
 
@@ -348,7 +341,7 @@ pub async fn container_remove(
     }
 
     let image = remove_image.then(|| item.image.clone());
-    let session = container_session(servers, runner, server_id).await?;
+    let session = admin_session(servers, runner, server_id).await?;
 
     let script = server_admin::remove_script(&name, force).map_err(|e| anyhow!("{e}"))?;
     let capture = container_exec(&session, script, ACTION_BUDGET).await?;
@@ -463,10 +456,31 @@ pub async fn container_console(
     let guard = ConsoleGuard { key };
 
     let command = server_admin::console_command(mode, &name).map_err(|e| anyhow!("{e}"))?;
-    let session = container_session(servers, runner, server_id).await?;
+    let session = admin_session(servers, runner, server_id).await?;
     let pty = engine::open_pty(&session, &command, cols, rows)
         .await
         .map_err(|e| anyhow!("{e}"))?;
 
     Ok((pty, command, guard))
+}
+
+// ─────────────────────── 服务器终端 ───────────────────────
+
+/// 开一条服务器登录 shell。
+///
+/// 不占占用表：SSH shell 各自独立 PTY，两条会话不会串输入
+/// （容器控制台要互斥，是因为 `docker exec` 共享同一个容器 TTY）。
+pub async fn server_terminal(
+    servers: &ServerStore,
+    runner: &Arc<TunnelRunner>,
+    server_id: &str,
+    cols: u32,
+    rows: u32,
+) -> Result<(engine::PtyChannel, String)> {
+    let session = admin_session(servers, runner, server_id).await?;
+    let command = server_admin::login_shell_command();
+    let pty = engine::open_pty(&session, &command, cols, rows)
+        .await
+        .map_err(|e| anyhow!("{e}"))?;
+    Ok((pty, command))
 }

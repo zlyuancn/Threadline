@@ -9,6 +9,7 @@
 |---|---|---|
 | B7 收口（环境验证 + 安装实装） | 🚧 进行中 | `docs/TESTPLAN.md` |
 | 安卓端 A0–A5（`-L` + 内置浏览器） | 🚧 A0 进行中（构建侧已通，真机三项待验证） | `docs/plans/2026-11-19-android-client-design.md`、`docs/plans/2026-11-19-android-client-plan.md` |
+| 服务器管理 P2 · 终端 | 🚧 代码侧完成（2026-11-19），真机待验 | `docs/plans/2026-11-19-server-terminal-design.md`、`docs/plans/2026-11-19-server-terminal-plan.md` |
 
 代码侧 B0–B6 已全部完成（见 `DONE.md`）。剩下的都是**只能在真机上做**的验证。
 
@@ -168,7 +169,20 @@ C 档（DNS 劫持）留后续。技术栈：Kotlin + Compose + Rust 共享核�
         实测 live 297–305ms、disks 125ms。
 - [ ] **P2 进程管理**：全量进程列表 + 结束进程（写操作，需二次确认与独立契约）。
 - [ ] **P2 文件管理**：SFTP 列目录 / 下载 / 上传 / 删除；大文件必须流式，不能一次性读进内存。
-- [ ] **P2 终端**：`request_pty` + 双向 channel；前端要 xterm.js，先评估体积再引入。
+- [x] **P2 终端 + 页头切换器（代码侧，2026-11-19 完成）**：设计 `docs/plans/2026-11-19-server-terminal-design.md`，
+      计划 `docs/plans/2026-11-19-server-terminal-plan.md`。管理页「终端」模块转正：单会话登录 shell
+      （`bash -l` 优先、无则 `sh`），复用 `engine::open_pty` 与容器控制台的帧协议；接口层抽
+      `pty_bridge`（容器控制台与终端共用）、鉴权 query-token 扩到 `/admin/terminal`；前端纯件
+      `models/ptySession.ts` + xterm 接线 `ptyTerminal.ts`。管理页内切模块不断开（`v-show` 常驻）、
+      返回隧道页断开；概览三态不再连坐其它模块（点「刷新」不会拆掉终端）。同批：页头服务器切换器
+      （剔除「本机」、>6 台出过滤框、切换后停在当前模块），`App.vue` 的 `adminServerId` 仍是唯一真相。
+      `shell::pick_shell(login)` 顺带收敛了容器控制的 `PICK_SHELL`（字符串逐字不变 + 单测断言）。
+      门禁：`cargo test -p tl-core` 257 项、前端 151 项、`vue-tsc` / `vite build` 全绿。
+- [ ] **[环境] 终端与切换器真机验证**：按 `docs/TESTPLAN.md` 的 U-42 / U-43 / U-44 逐条跑；
+      重点看全屏程序排版、切走切回不变 20 列、返回隧道页后远端 shell 无残留（`ps -p <PID>`）。
+- [ ] **B6 容器控制台共用纯件**（可选，有回归风险）：`ContainerConsole.vue` 改用
+      `PTY_THEME` / `parseServerFrame` / `createTerminal`（只换纯件，生命周期逻辑不动），
+      改完需真机回归 exec / root 两档。本轮未做——没有真机环境时不动已验证路径。
 - [ ] **P3 容器管理 / 网络管理 / 防火墙**：启停与日志；网卡路由与监听端口；ufw/firewalld/iptables 规则查看。
 - [ ] **P4 服务与日志**：systemd 单元启停、journalctl 跟随。
 - [ ] **[环境] 真机验证概览**：真实 Linux 服务器上跑一遍，确认无 docker、多挂载点、`ps` 不支持 `--sort`
