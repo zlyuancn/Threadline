@@ -413,6 +413,44 @@ pub struct AcceptHostKeyRequest {
 
 // ─────────────────────── 隧道 ───────────────────────
 
+/// 自定义头的一行（`name: value`）。上行请求里同名覆盖、否则追加。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeaderPair {
+    pub name: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+/// 一条转发的 HTTP 头改写细则；只在 `rewrite_http_headers` 打开且入口能看到明文时生效。
+///
+/// 默认值 = 旧行为：`Host` 换成远端地址、补 `X-Forwarded-*`、回写 `Location`、不加自定义头。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HeaderRewrite {
+    /// 上行 `Host`：
+    /// - `None` = 自动用远端地址（80/443 省略端口）
+    /// - `Some("")` = 保留浏览器带来的原值
+    /// - `Some(v)` = 用 `v`
+    pub host: Option<String>,
+    /// 是否补 `X-Forwarded-Proto` / `X-Forwarded-Host`。
+    pub forward_headers: bool,
+    /// 响应里指向远端的 `Location` 是否换回浏览器访问的地址。
+    pub rewrite_location: bool,
+    /// 额外追加/覆盖的请求头（按顺序；同名以最后一行为准）。
+    pub extra: Vec<HeaderPair>,
+}
+
+impl Default for HeaderRewrite {
+    fn default() -> Self {
+        Self {
+            host: None,
+            forward_headers: true,
+            rewrite_location: true,
+            extra: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TunnelDto {
     pub id: String,
@@ -448,6 +486,18 @@ pub struct TunnelDto {
     /// 只有 `domain` 非空时参与入口模式判定；`scheme=tcp` 时忽略。
     #[serde(default)]
     pub remote_scheme: Option<String>,
+    /// 是否改写 HTTP 头：`Host` 换成远端地址、补 `X-Forwarded-Proto/Host`、
+    /// 响应 `Location` 换回浏览器访问的域名地址。
+    ///
+    /// 默认 `false` = 完全透明转发（浏览器带来的 `Host` 原样到达远端）。
+    /// 只有能看到明文的入口才谈得上改写：① http→http 与 ② https→http（本地解密）；
+    /// ③ HTTPS 透传与 tcp/rdp/ssh 是字节管道，开关不生效。
+    #[serde(default)]
+    pub rewrite_http_headers: bool,
+    /// 头改写细则（`Host` 目标、是否补 `X-Forwarded-*`、是否回写 `Location`、自定义头）。
+    /// `rewrite_http_headers` 关闭时整份不用；老配置没有这个字段 = 全默认。
+    #[serde(default)]
+    pub header_rewrite: HeaderRewrite,
     /// 自定义图标（URL 或 `data:image/...`）。空 = 由界面按入口自动取 favicon。
     #[serde(default)]
     pub icon: String,
@@ -520,6 +570,12 @@ pub struct CreateTunnelRequest {
     /// 远端协议；`None` = 由 `scheme` 推导。
     #[serde(default)]
     pub remote_scheme: Option<String>,
+    /// 是否改写 HTTP 头（`Host` / `X-Forwarded-*` / `Location`）；默认关闭。
+    #[serde(default)]
+    pub rewrite_http_headers: bool,
+    /// 改写细则；不传 = 全默认（等价于旧行为）。
+    #[serde(default)]
+    pub header_rewrite: Option<HeaderRewrite>,
     /// 自定义图标（URL 或 `data:image/...`）；空 = 自动。
     #[serde(default)]
     pub icon: String,
@@ -567,6 +623,12 @@ pub struct PatchTunnelRequest {
     /// 远端协议；空串或 `auto` 表示回到「由 `scheme` 推导」。
     #[serde(default)]
     pub remote_scheme: Option<String>,
+    /// 是否改写 HTTP 头；不传 = 不改这一项。
+    #[serde(default)]
+    pub rewrite_http_headers: Option<bool>,
+    /// 改写细则；不传 = 不改这一项。
+    #[serde(default)]
+    pub header_rewrite: Option<HeaderRewrite>,
     /// 自定义图标；空串表示清空（回到自动取 favicon）。
     #[serde(default)]
     pub icon: Option<String>,
@@ -1219,6 +1281,12 @@ pub struct ProfileForward {
     /// 远端实际协议。漏了它，`https` + 远端 `http` 的本地 TLS 终止会退化成透传。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_scheme: Option<String>,
+    /// 是否改写 HTTP 头；老包没有这个字段 = 不改写。
+    #[serde(default)]
+    pub rewrite_http_headers: bool,
+    /// 头改写细则；老包没有这个字段 = 全默认。
+    #[serde(default)]
+    pub header_rewrite: HeaderRewrite,
     #[serde(default)]
     pub open_path: String,
     #[serde(default)]
@@ -1339,6 +1407,12 @@ pub struct ProfileImportForward {
     pub domain: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_scheme: Option<String>,
+    /// 是否改写 HTTP 头；缺省 = 不改（老包未带）。
+    #[serde(default)]
+    pub rewrite_http_headers: bool,
+    /// 头改写细则；缺省 = 全默认（老包未带）。
+    #[serde(default)]
+    pub header_rewrite: HeaderRewrite,
     #[serde(default)]
     pub open_path: String,
     #[serde(default)]

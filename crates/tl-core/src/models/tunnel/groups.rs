@@ -350,6 +350,8 @@ mod tests {
                 domain: String::new(),
                 domain_host: String::new(),
                 remote_scheme: None,
+                rewrite_http_headers: false,
+                header_rewrite: Default::default(),
                 icon: String::new(),
                 group: group.into(),
                 in_app: true,

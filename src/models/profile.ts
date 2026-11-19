@@ -6,7 +6,7 @@
  * 否则必然出现"预览说能建、落地却失败"。
  */
 
-import type { CredentialKind, ServerDto, TunnelDto } from '../api/types';
+import type { CredentialKind, HeaderRewrite, ServerDto, TunnelDto } from '../api/types';
 import { zip, unzip, type ZipEntry } from './zip';
 
 export const PROFILE_KIND = 'threadline.profile';
@@ -31,6 +31,10 @@ export interface ProfileForward {
   scheme: string;
   domain: string;
   remote_scheme?: string | null;
+  /** 是否改写 HTTP 头；老包没有这个字段 = 不改写。 */
+  rewrite_http_headers?: boolean;
+  /** 头改写细则；老包没有这个字段 = 全默认。 */
+  header_rewrite?: HeaderRewrite;
   open_path: string;
   note: string;
   group: string;
@@ -192,6 +196,12 @@ function toProfileForward(
     scheme: forward.scheme ?? 'tcp',
     domain: forward.domain ?? '',
     remote_scheme: forward.remote_scheme ?? null,
+    rewrite_http_headers: forward.rewrite_http_headers ?? false,
+    header_rewrite: forward.header_rewrite ?? {
+      forward_headers: true,
+      rewrite_location: true,
+      extra: [],
+    },
     open_path: forward.open_path ?? '',
     note: forward.note ?? '',
     group: forward.group ?? '',

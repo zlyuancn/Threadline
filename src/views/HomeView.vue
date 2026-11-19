@@ -7,8 +7,18 @@ import { useTunnelsStore } from '../models/tunnels';
 import { useServersStore } from '../models/servers';
 import { withTimeout } from '../models/asyncAction';
 import { matchesQuery, type ForwardLike } from '../models/forwardView';
+import { applySchemeChange, type Scheme } from '../models/forwardForm';
+import {
+  defaultHeaderRewrite,
+  isDefaultRewrite,
+  previewRewrite,
+  toDtoRewrite,
+  toFormRewrite,
+  type HeaderRewriteForm,
+} from '../models/headerRewrite';
 import { formatRate, useTrafficStore } from '../models/traffic';
 import ForwardCard from '../components/ForwardCard.vue';
+import InfoTip from '../components/InfoTip.vue';
 
 import { useSelectionStore } from '../models/selection';
 import {
@@ -18,7 +28,7 @@ import {
   listSshKeys,
   readLocalPrivateKey,
 } from '../api/native';
-import type { CredentialKind, CreateServerRequest } from '../api/types';
+import type { CredentialKind, CreateServerRequest, HeaderRewrite } from '../api/types';
 
 const forwards = useTunnelsStore();
 const tunnels = useServersStore();
@@ -57,40 +67,23 @@ function onLocalPortEdited() {
   localPortTouched.value = true;
 }
 
-/**
- * 本地协议变了：入口端口按格给默认值（① 80 / ② 443 / ③ 远端端口）。
- *
- * 不能统一用 remote_port：② 的远端是 80，默认填 80 会让 `https://域名` 直接连不上。
- */
-const DEFAULT_LOCAL_PORT: Record<Scheme, number | null> = {
-  http: 80,
-  https: 443,
-  rdp: 3389,
-  ssh: 22,
-  tcp: null,
-};
-
-/** 远端端口的协议默认值：选 RDP 就该是 3389，选 SSH 就该是 22。 */
-const DEFAULT_REMOTE_PORT: Partial<Record<Scheme, number>> = {
-  http: 8080,
-  https: 443,
-  rdp: 3389,
-  ssh: 22,
-};
-
-/** 这些值视为「没改过」，切协议时允许被覆盖；用户填的其它端口一律保留。 */
-const COMMON_REMOTE_PORTS = new Set([22, 80, 443, 3389, 8080]);
-
 function onSchemeChanged(value: Scheme) {
-  // 切协议是明确动作：端口必须跟着协议走（HTTP→HTTPS 就是 80→443），
-  // 不能因为之前手填过一次就保留旧值，否则 `https://域名:80` 会直接连不上。
-  const form = forwardForm.value;
-  const remotePreset = DEFAULT_REMOTE_PORT[value];
-  if (remotePreset !== undefined && COMMON_REMOTE_PORTS.has(form.remote_port)) {
-    form.remote_port = remotePreset;
-  }
-  const preset = DEFAULT_LOCAL_PORT[value];
-  form.local_port = preset ?? form.remote_port;
+  // 规则（写回协议 + 端口跟着协议走）在 models/forwardForm 里，纯函数好测：
+  // 之前换成原生 select 时漏了「写回 scheme」，界面就变成「选了没反应」。
+  applySchemeChange(forwardForm.value, value);
+}
+
+/** 原生 select 的 change：收窄回 `Scheme` 再交给统一逻辑（端口跟着协议走）。 */
+function onNativeSchemeChange(event: Event) {
+  onSchemeChanged((event.target as HTMLSelectElement).value as Scheme);
+}
+
+/** 远端协议：空串 = 跟随本地。 */
+function onRemoteSchemeChange(event: Event) {
+  forwardForm.value.remote_scheme = (event.target as HTMLSelectElement).value as
+    | ''
+    | 'http'
+    | 'https';
 }
 
 /** 只有 http/https 才有远端协议与「打开路径」这两回事。 */
@@ -450,9 +443,6 @@ async function removeTunnel(row: { id: string; name: string }) {
 
 /* ───────────── 端口转发 ───────────── */
 
-/** 本机用哪种协议访问；rdp/ssh 本质是 TCP，只是默认端口不同。 */
-type Scheme = 'tcp' | 'http' | 'https' | 'rdp' | 'ssh';
-
 interface ForwardForm {
   id: string | null;
   name: string;
@@ -472,6 +462,10 @@ interface ForwardForm {
   domain: string;
   /** 远端实际协议；空串 = 由本地协议推导。 */
   remote_scheme: 'http' | 'https' | '';
+  /** 是否改写 HTTP 头（Host / X-Forwarded-* / Location）；默认关。 */
+  rewrite_http_headers: boolean;
+  /** 改写细则：Host 三态、两个开关、自定义头 */
+  header_rewrite: HeaderRewriteForm;
   /** 自定义图标（导入后存成 data:image）；空 = 按入口自动取 favicon。 */
   icon: string;
   /** 自定义分组；空 = 未分组。 */
@@ -523,6 +517,121 @@ const forwardForm = ref<ForwardForm>(emptyForward());
 /** 填了域名就不再由用户决定绑定地址：后端会分配 127.0.0.2–254。 */
 const usesDomain = computed(() => forwardForm.value.domain.trim() !== '');
 
+/**
+ * 头改写只在能看到明文的入口有意义：① http→http 明文直通、② https→http 本地解密。
+ * ③ https 透传读到的是 TLS 密文；tcp/rdp/ssh 没有 HTTP 语义——开关置灰。
+ */
+const canRewriteHeaders = computed(() => {
+  const form = forwardForm.value;
+  if (!usesDomain.value || !isWebScheme(form.scheme)) {
+    return false;
+  }
+  // 远端留空 = 跟随本地
+  return (form.remote_scheme || form.scheme) === 'http';
+});
+
+/** 开关置灰时说明原因，避免用户以为是界面坏了。 */
+const rewriteUnavailableHint = computed(() => {
+  if (!usesDomain.value) {
+    return '没填访问域名时是纯字节管道，不改写任何头。';
+  }
+  return 'HTTPS→HTTPS 是端到端透传，读到的是密文，改不了。';
+});
+
+/** 开关真正生效（入口看得见明文且开关打开）。关掉时细则只读。 */
+const rewriteEditable = computed(
+  () => canRewriteHeaders.value && forwardForm.value.rewrite_http_headers,
+);
+
+/** 「这次会改成什么」的对照表，随表单实时算；开关关掉时如实显示「原样透传」。 */
+const rewritePreview = computed(() =>
+  previewRewrite(forwardForm.value.header_rewrite, {
+    enabled: rewriteEditable.value,
+    entryHost:
+      forwardForm.value.domain.trim() || forwardForm.value.local_host || '127.0.0.1',
+    entryPort: forwardForm.value.local_port,
+    scheme: forwardForm.value.scheme === 'https' ? 'https' : 'http',
+    remoteScheme:
+      forwardForm.value.remote_scheme ||
+      (forwardForm.value.scheme === 'https' ? 'https' : 'http'),
+    remoteHost: forwardForm.value.remote_host || '127.0.0.1',
+    remotePort: forwardForm.value.remote_port,
+  }),
+);
+
+/** 全默认时不给「还原」按钮，免得点了没变化。 */
+const rewriteIsDefault = computed(() => isDefaultRewrite(forwardForm.value.header_rewrite));
+
+function resetHeaderRewrite() {
+  forwardForm.value.header_rewrite = defaultHeaderRewrite();
+}
+
+function addHeaderRow() {
+  forwardForm.value.header_rewrite.extra.push({ name: '', value: '' });
+}
+
+function removeHeaderRow(index: number) {
+  forwardForm.value.header_rewrite.extra.splice(index, 1);
+}
+
+// 静态说明一律进「?」气泡：表单里只保留状态与错误，不铺大段解释。
+const entryHelp =
+  '这是浏览器访问的入口。\n' +
+  'HTTP：明文直通；HTTPS：核心用本机 CA 终止 TLS（可回源到 http 或 https）；RDP / SSH / TCP：纯端口转发。\n' +
+  '域名模式下地址由核心分配（127.0.0.2–254，同域名共用同一个地址），' +
+  '端口建议 HTTPS 443、HTTP 80，浏览器里才不用带端口。';
+const remoteHelp =
+  '这是目标程序在服务器上监听的地址与协议。\n' +
+  '远端协议留空＝跟随本地：HTTPS→HTTPS 端到端透传（核心看不到内容，也就改不了 HTTP 头）。';
+const domainHelp =
+  '留空就只用本机地址访问，与以前完全一致。\n' +
+  '填了才额外分配 127.0.0.2–254 里的域名入口，并把域名写进本机 hosts（首次写入需要一次 UAC）。';
+const rewriteHelp =
+  '打开后把 Host 换成远端地址（80/443 不带端口）、补 X-Forwarded-Proto/Host，' +
+  '并把远端指回自己地址的 Location 换回域名地址。\n' +
+  '默认关闭＝原样转发，远端按自己的 server_name 匹配。';
+const iconHelp = '导入后缩成 128px 保存到本地配置，离线也能显示；留空则按入口自动取 favicon。';
+
+/**
+ * 表单分区折叠状态。
+ *
+ * 「访问方式」与「更多设置」默认收起，把首屏压到 6 行（名称/隧道/协议/本地/远端/启用）；
+ * 编辑已有转发时按内容自动展开，免得隐藏用户已经填过的值。
+ */
+const forwardDomainOpen = ref(false);
+const forwardMoreOpen = ref(false);
+
+/** 折叠标题右侧的摘要：一眼看出这条转发有没有域名、改不改头。 */
+const domainSummary = computed(() => {
+  const domain = forwardForm.value.domain.trim();
+  if (!domain) {
+    return '未使用域名';
+  }
+  // 只有真正会生效时才写「改写」：③ 透传即便开关留着 true 也不生效
+  return canRewriteHeaders.value && forwardForm.value.rewrite_http_headers
+    ? `${domain} · 改写 HTTP 头`
+    : domain;
+});
+
+/** 「更多设置」里已经填了哪些，收起时也留个线索。 */
+const moreSummary = computed(() => {
+  const form = forwardForm.value;
+  const filled: string[] = [];
+  if (form.note.trim()) {
+    filled.push('备注');
+  }
+  if (form.group.trim()) {
+    filled.push('分组');
+  }
+  if (form.icon) {
+    filled.push('图标');
+  }
+  if (!form.in_app) {
+    filled.push('不在应用页');
+  }
+  return filled.length ? filled.join(' · ') : '默认';
+});
+
 /** 归一化域名用于比较（与后端 `validate_domain` 同口径：去空格、小写、去末尾点）。 */
 function normalizeDomain(raw: string): string {
   return raw.trim().toLowerCase().replace(/\.$/, '');
@@ -543,6 +652,56 @@ const domainSiblings = computed(() => {
   return forwards.items.filter(
     (item) => item.definition.id !== selfId && normalizeDomain(item.definition.domain ?? '') === domain,
   );
+});
+
+/**
+ * 域名入口会落在哪个回环地址：按后端 `domain_host_for` 的三条分支原样推断，
+ * 让表单直接显示结果，而不是「保存后自动分配」这种被截断的占位符。
+ *
+ * 1. 同域名已有别的转发 → 共用它的地址；
+ * 2. 编辑本条且域名没改 → 保持原地址；
+ * 3. 否则取池里第一个没被占用的（`domain_host` 与 `local_host` 都算占用）。
+ */
+const predictedDomainHost = computed(() => {
+  const domain = normalizeDomain(forwardForm.value.domain);
+  if (!domain) {
+    return '';
+  }
+  const selfId = forwardForm.value.id;
+  const sibling = domainSiblings.value.find((item) => item.definition.domain_host);
+  if (sibling) {
+    return sibling.definition.domain_host;
+  }
+  const self = forwards.items.find((item) => item.definition.id === selfId)?.definition;
+  if (self?.domain_host && normalizeDomain(self.domain ?? '') === domain) {
+    return self.domain_host;
+  }
+  const used = new Set<string>();
+  for (const item of forwards.items) {
+    if (item.definition.id === selfId) {
+      continue;
+    }
+    for (const value of [item.definition.domain_host, item.definition.local_host]) {
+      if (value) {
+        used.add(value);
+      }
+    }
+  }
+  for (let n = 2; n <= 254; n += 1) {
+    const candidate = `127.0.0.${n}`;
+    if (!used.has(candidate)) {
+      return candidate;
+    }
+  }
+  return '';
+});
+
+/** 本地地址框：域名模式下显示推断出的回环地址（只读），其余情况直接编辑。 */
+const localHostField = computed({
+  get: () => (usesDomain.value ? predictedDomainHost.value : forwardForm.value.local_host),
+  set: (value: string) => {
+    forwardForm.value.local_host = value;
+  },
 });
 
 /** 表单里「分组」的建议项：从现有转发里收，允许直接输入新分组（个人数据不进代码）。 */
@@ -581,6 +740,8 @@ function emptyForward(serverId = ''): ForwardForm {
     scheme: 'http',
     domain: '',
     remote_scheme: '',
+    rewrite_http_headers: false,
+    header_rewrite: defaultHeaderRewrite(),
     icon: '',
     group: '',
     in_app: true,
@@ -687,6 +848,8 @@ function openForward(
     scheme?: Scheme;
     domain?: string;
     remote_scheme?: 'http' | 'https' | null;
+    rewrite_http_headers?: boolean;
+    header_rewrite?: HeaderRewrite | null;
     icon?: string;
     group?: string;
     in_app?: boolean;
@@ -711,6 +874,8 @@ function openForward(
       scheme: row.scheme ?? 'tcp',
       domain: row.domain ?? '',
       remote_scheme: row.remote_scheme ?? '',
+      rewrite_http_headers: row.rewrite_http_headers === true,
+      header_rewrite: toFormRewrite(row.header_rewrite),
       icon: row.icon ?? '',
       group: row.group ?? '',
       in_app: row.in_app !== false,
@@ -718,6 +883,14 @@ function openForward(
   } else {
     forwardForm.value = emptyForward(serverId ?? tunnels.servers[0]?.id ?? '');
   }
+  // 已经填过的分区直接展开，折叠只用来藏「还没用上的东西」
+  forwardDomainOpen.value = Boolean(forwardForm.value.domain.trim());
+  forwardMoreOpen.value = Boolean(
+    forwardForm.value.note.trim() ||
+      forwardForm.value.group.trim() ||
+      forwardForm.value.icon ||
+      !forwardForm.value.in_app,
+  );
   iconUrl.value = '';
   forwardDialog.value = true;
 }
@@ -792,6 +965,8 @@ async function saveForward() {
             scheme: form.scheme,
             domain: form.domain.trim(),
             remote_scheme: form.remote_scheme || undefined,
+            rewrite_http_headers: form.rewrite_http_headers,
+            header_rewrite: toDtoRewrite(form.header_rewrite),
             icon,
             group: form.group.trim(),
             in_app: form.in_app,
@@ -809,6 +984,8 @@ async function saveForward() {
             scheme: form.scheme,
             domain: form.domain.trim(),
             remote_scheme: form.remote_scheme || undefined,
+            rewrite_http_headers: form.rewrite_http_headers,
+            header_rewrite: toDtoRewrite(form.header_rewrite),
             icon,
             group: form.group.trim(),
             in_app: form.in_app,
@@ -1341,63 +1518,6 @@ function tunnelDot(row: { server: { id: string } }): string {
         <el-form-item label="名称">
           <el-input v-model="forwardForm.name" placeholder="例如 homeassistant" />
         </el-form-item>
-        <el-form-item label="备注">
-          <el-input
-            v-model="forwardForm.note"
-            maxlength="120"
-            show-word-limit
-            placeholder="一句话说明，例如「内网 HA 面板」"
-          />
-        </el-form-item>
-        <el-form-item label="分组">
-          <el-select
-            v-model="forwardForm.group"
-            filterable
-            allow-create
-            default-first-option
-            clearable
-            placeholder="留空即未分组；可直接输入新分组"
-            style="width: 100%"
-          >
-            <el-option v-for="g in groupOptions" :key="g" :label="g" :value="g" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="图标">
-          <div class="icon-edit">
-            <img v-if="forwardForm.icon" :src="forwardForm.icon" class="icon-thumb" alt="" />
-            <span v-else class="icon-thumb is-empty">自动</span>
-            <el-input v-model="iconUrl" placeholder="粘贴图标 URL 后点导入" />
-            <button
-              class="btn"
-              type="button"
-              :disabled="iconBusy || !iconUrl.trim()"
-              @click="importIconFromUrl"
-            >
-              {{ iconBusy ? '导入中…' : '导入' }}
-            </button>
-            <label class="btn">
-              本地文件
-              <input type="file" accept="image/*" hidden @change="importIconFromFile" />
-            </label>
-            <button
-              v-if="forwardForm.icon"
-              class="btn"
-              type="button"
-              @click="forwardForm.icon = ''"
-            >
-              清除
-            </button>
-          </div>
-          <p class="hint" style="width: 100%">
-            导入后缩成 128px 并保存到本地配置，离线也能显示；留空则按入口自动取 favicon。
-          </p>
-        </el-form-item>
-        <el-form-item label="添加到应用">
-          <el-switch v-model="forwardForm.in_app" />
-          <span class="hint" style="margin-left: 10px">
-            打开后出现在「应用」页，可以按分组摆放。
-          </span>
-        </el-form-item>
         <el-form-item label="所属隧道">
           <el-select v-model="forwardForm.server_id" style="width: 100%">
             <el-option
@@ -1408,77 +1528,30 @@ function tunnelDot(row: { server: { id: string } }): string {
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="访问域名（可选）">
-          <el-input v-model="forwardForm.domain" placeholder="留空即不用域名；例如 home.example.com" />
-          <p class="hint" style="width: 100%">
-            留空就只用本机地址访问，与以前完全一致；填了才额外分配域名入口（127.0.0.2–254），
-            本机 hosts 会把域名指到这条转发，首次写入需要一次 UAC 授权。
-          </p>
-          <p v-if="domainSiblings.length" class="hint" style="width: 100%">
-            {{ forwardForm.domain.trim() }} 已由「{{
-              domainSiblings.map((item) => item.definition.name).join('、')
-            }}」使用：同域名共用同一个回环地址，靠端口区分（已占 {{
-              domainSiblings.map((item) => item.definition.local_port).join('、')
-            }}），本条请换一个端口（例如网页 443、SSH 22）。
-          </p>
-        </el-form-item>
-        <el-form-item label="协议">
-          <div style="display: flex; gap: 8px; width: 100%; align-items: center">
-            <span class="hint" style="white-space: nowrap">本地</span>
-            <el-select v-model="forwardForm.scheme" style="width: 110px" @change="onSchemeChanged">
-              <el-option label="HTTP" value="http" />
-              <el-option label="HTTPS" value="https" />
-              <el-option label="RDP" value="rdp" />
-              <el-option label="SSH" value="ssh" />
-              <el-option label="TCP" value="tcp" />
-            </el-select>
-            <span class="hint" style="white-space: nowrap">→ 远端</span>
-            <el-select
-              v-if="isWebScheme(forwardForm.scheme)"
-              v-model="forwardForm.remote_scheme"
-              placeholder="跟随本地"
-              style="width: 130px"
-            >
-              <el-option label="跟随本地" value="" />
-              <el-option label="HTTP" value="http" />
-              <el-option label="HTTPS" value="https" />
-            </el-select>
-            <span v-else class="hint">纯 TCP，没有远端协议</span>
-          </div>
-          <p class="hint" style="width: 100%">
-            HTTP→HTTP 明文直通；HTTPS→HTTP 本地解密；HTTPS→HTTPS 透传。
-            RDP / SSH / TCP 都是纯端口转发，只有默认端口不同。
-          </p>
-          <p
-            v-if="invalidCombo()"
-            class="hint"
-            style="width: 100%; color: var(--el-color-danger)"
-          >
-            远端是 https 时本地必须也是 https。
-          </p>
-        </el-form-item>
-        <el-form-item v-if="isWebScheme(forwardForm.scheme)" label="打开路径">
-          <el-input
-            v-model="forwardForm.open_path"
-            placeholder="留空就是 /；可填 /lovelace/0"
-          >
-            <template #prepend>
-              {{ forwardForm.scheme }}://{{ forwardForm.domain || '127.0.0.1' }}:{{ forwardForm.local_port }}
-            </template>
-          </el-input>
-        </el-form-item>
         <el-form-item label="本地">
-          <div style="display: flex; gap: 8px; width: 100%; align-items: center">
-            <!-- 域名模式下地址由核心分配：这里必须是固定高度的输入框，
-                 不能放一行会换行的提示文字（flex 行会被撑高，端口输入框跟着被拉伸）。 -->
+          <div class="field-row">
+            <!-- 协议拼在地址前面：一行就是「本地 <协议>://<地址>:<端口>」 -->
             <el-input
-              v-if="usesDomain"
-              model-value=""
-              placeholder="保存后自动分配（与同名域名共用）"
-              readonly
+              v-model="localHostField"
+              :readonly="usesDomain"
+              :placeholder="usesDomain ? '自动分配' : '127.0.0.1'"
               style="flex: 1"
-            />
-            <el-input v-else v-model="forwardForm.local_host" style="flex: 1" />
+            >
+              <template #prepend>
+                <!-- 原生 select：只有 5 个固定项，不需要搜索；外观自己画，不跟 Element 内部类较劲 -->
+                <select
+                  class="prepend-select"
+                  :value="forwardForm.scheme"
+                  @change="onNativeSchemeChange"
+                >
+                  <option value="http">HTTP</option>
+                  <option value="https">HTTPS</option>
+                  <option value="rdp">RDP</option>
+                  <option value="ssh">SSH</option>
+                  <option value="tcp">TCP</option>
+                </select>
+              </template>
+            </el-input>
             <el-input-number
               v-model="forwardForm.local_port"
               :min="1"
@@ -1490,18 +1563,27 @@ function tunnelDot(row: { server: { id: string } }): string {
             <button class="btn is-icon" type="button" title="随机一个没被占用的本地端口" @click="randomLocalPort">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><circle cx="5.8" cy="5.8" r="0.9" fill="currentColor"/><circle cx="10.2" cy="10.2" r="0.9" fill="currentColor"/><circle cx="8" cy="8" r="0.9" fill="currentColor"/></svg>
             </button>
+            <InfoTip :content="entryHelp" />
           </div>
-          <p class="hint" style="width: 100%">
-            域名入口用的就是这个端口：HTTPS 填 443、HTTP 填 80，浏览器里才不用带端口。
-            <template v-if="usesDomain">
-              域名入口是 127.0.0.2–254 里的一个回环地址，<strong>同域名的多条转发共用同一个地址</strong>，
-              靠端口区分（例如网页 443、SSH 22）。
-            </template>
-          </p>
         </el-form-item>
         <el-form-item label="远端">
-          <div style="display: flex; gap: 8px; width: 100%">
-            <el-input v-model="forwardForm.remote_host" placeholder="服务器视角的地址" style="flex: 1" />
+          <div class="field-row">
+            <el-input v-model="forwardForm.remote_host" placeholder="服务器视角的地址" style="flex: 1">
+              <template #prepend>
+                <select
+                  v-if="isWebScheme(forwardForm.scheme)"
+                  class="prepend-select"
+                  :value="forwardForm.remote_scheme"
+                  @change="onRemoteSchemeChange"
+                >
+                  <option value="">跟随本地</option>
+                  <option value="http">HTTP</option>
+                  <option value="https">HTTPS</option>
+                </select>
+                <!-- 纯 TCP 没有远端协议，但保留同宽占位，两行输入框能对齐 -->
+                <span v-else class="prepend-text">TCP</span>
+              </template>
+            </el-input>
             <el-input-number
               v-model="forwardForm.remote_port"
               :min="1"
@@ -1510,12 +1592,264 @@ function tunnelDot(row: { server: { id: string } }): string {
               style="width: 130px"
               @update:model-value="followRemotePort"
             />
+            <!-- 与「本地」行的随机端口按钮等宽：两行的地址框、端口框才能对齐 -->
+            <span class="port-tool-spacer" aria-hidden="true"></span>
+            <InfoTip :content="remoteHelp" />
           </div>
+          <p
+            v-if="invalidCombo()"
+            class="hint"
+            style="width: 100%; color: var(--el-color-danger)"
+          >
+            远端是 https 时本地必须也是 https。
+          </p>
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="forwardForm.enabled" size="small" />
           <span class="hint" style="margin-left: 8px">保存后立即连接；隧道未启用时不会启动</span>
         </el-form-item>
+
+        <!-- 分区：访问方式。默认折叠，标题右侧直接写当前值，不点开也知道设没设。 -->
+        <div class="form-group" :class="{ 'is-open': forwardDomainOpen }">
+          <button type="button" class="form-group-head" @click="forwardDomainOpen = !forwardDomainOpen">
+            <span class="form-group-title">访问方式</span>
+            <span class="form-group-summary">{{ domainSummary }}</span>
+            <svg class="form-group-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
+          </button>
+          <div v-show="forwardDomainOpen" class="form-group-body">
+            <el-form-item label="访问域名">
+              <div class="field-row">
+                <el-input v-model="forwardForm.domain" placeholder="例如 home.example.com">
+                  <template #prepend>
+                    <span class="prepend-proto">{{ forwardForm.scheme }}://</span>
+                  </template>
+                </el-input>
+                <InfoTip :content="domainHelp" />
+              </div>
+              <p v-if="domainSiblings.length" class="hint" style="width: 100%">
+                {{ forwardForm.domain.trim() }} 已由「{{
+                  domainSiblings.map((item) => item.definition.name).join('、')
+                }}」使用：同域名共用同一个回环地址，靠端口区分（已占 {{
+                  domainSiblings.map((item) => item.definition.local_port).join('、')
+                }}），本条请换一个端口（例如网页 443、SSH 22）。
+              </p>
+            </el-form-item>
+            <!-- 打开路径紧跟访问域名：两者都是「浏览器怎么访问这条转发」 -->
+            <el-form-item v-if="isWebScheme(forwardForm.scheme)" label="打开路径">
+              <el-input
+                v-model="forwardForm.open_path"
+                placeholder="留空就是 /；可填 /lovelace/0"
+              >
+                <template #prepend>
+                  {{ forwardForm.scheme }}://{{ forwardForm.domain || '127.0.0.1' }}:{{ forwardForm.local_port }}
+                </template>
+              </el-input>
+            </el-form-item>
+            <!-- 只有 web 入口才谈得上 HTTP 头；tcp/rdp/ssh 连这一行都不显示 -->
+            <el-form-item v-if="isWebScheme(forwardForm.scheme)" label="HTTP 头改写">
+              <el-switch v-model="forwardForm.rewrite_http_headers" :disabled="!canRewriteHeaders" />
+              <InfoTip v-if="canRewriteHeaders" :content="rewriteHelp" />
+              <p v-if="!canRewriteHeaders" class="hint" style="width: 100%">
+                {{ rewriteUnavailableHint }}
+              </p>
+
+              <!-- 细则与预览常显：开关关掉时也要能看清「远端会收到什么」，只是控件只读 -->
+              <div
+                v-if="canRewriteHeaders"
+                class="rewrite-editor"
+                :class="{ 'is-readonly': !rewriteEditable }"
+              >
+                <div class="rewrite-row">
+                  <span class="rewrite-name">Host</span>
+                  <el-select
+                    v-model="forwardForm.header_rewrite.host_mode"
+                    size="small"
+                    style="width: 152px"
+                    :disabled="!rewriteEditable"
+                  >
+                    <el-option label="自动（远端地址）" value="auto" />
+                    <el-option label="保留浏览器原值" value="keep" />
+                    <el-option label="自定义…" value="custom" />
+                  </el-select>
+                  <el-input
+                    v-if="forwardForm.header_rewrite.host_mode === 'custom'"
+                    v-model="forwardForm.header_rewrite.host"
+                    size="small"
+                    placeholder="例如 edge.example.com"
+                    :disabled="!rewriteEditable"
+                  />
+                </div>
+
+                <div class="rewrite-row">
+                  <span class="rewrite-name">补充头</span>
+                  <el-switch
+                    v-model="forwardForm.header_rewrite.forward_headers"
+                    size="small"
+                    :disabled="!rewriteEditable"
+                  />
+                  <span class="hint">打开＝发送 X-Forwarded-Proto / X-Forwarded-Host</span>
+                </div>
+
+                <div class="rewrite-row">
+                  <span class="rewrite-name">Location</span>
+                  <el-switch
+                    v-model="forwardForm.header_rewrite.rewrite_location"
+                    size="small"
+                    :disabled="!rewriteEditable"
+                  />
+                  <span class="hint">打开＝把远处的地址换回你访问的域名</span>
+                </div>
+
+                <div
+                  v-for="(pair, index) in forwardForm.header_rewrite.extra"
+                  :key="index"
+                  class="rewrite-row"
+                >
+                  <el-input
+                    v-model="pair.name"
+                    size="small"
+                    placeholder="头名，如 X-Real-IP"
+                    style="width: 160px"
+                    :disabled="!rewriteEditable"
+                  />
+                  <el-input
+                    v-model="pair.value"
+                    size="small"
+                    placeholder="值"
+                    :disabled="!rewriteEditable"
+                  />
+                  <button
+                    class="btn is-icon"
+                    type="button"
+                    title="删除这个头"
+                    :disabled="!rewriteEditable"
+                    @click="removeHeaderRow(index)"
+                  >
+                    <svg
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.6"
+                      stroke-linecap="round"
+                    >
+                      <path d="M4 4l8 8M12 4l-8 8" />
+                    </svg>
+                  </button>
+                </div>
+
+                <div class="rewrite-row">
+                  <button
+                    class="btn"
+                    type="button"
+                    :disabled="!rewriteEditable"
+                    @click="addHeaderRow"
+                  >
+                    + 自定义头
+                  </button>
+                  <button
+                    v-if="!rewriteIsDefault"
+                    class="btn"
+                    type="button"
+                    :disabled="!rewriteEditable"
+                    @click="resetHeaderRewrite"
+                  >
+                    还原默认
+                  </button>
+                </div>
+
+                <div class="rewrite-preview">
+                  <div class="rewrite-preview-title">
+                    {{
+                      rewriteEditable
+                        ? '这次会这样发给远端'
+                        : '开关关闭：原样透传，远端会收到下面这些'
+                    }}
+                  </div>
+                  <div
+                    v-for="(line, index) in rewritePreview"
+                    :key="`${line.label}-${index}`"
+                    class="rewrite-preview-row"
+                    :class="{ 'is-off': line.off, 'is-from': line.from !== '' }"
+                  >
+                    <span class="rewrite-preview-name">{{ line.label }}</span>
+                    <span v-if="line.note" class="rewrite-preview-note">{{ line.note }}</span>
+                    <template v-else>
+                      <span v-if="line.from" class="rewrite-preview-from">{{ line.from }}</span>
+                      <span v-if="line.from" class="rewrite-preview-arrow">→</span>
+                      <span class="rewrite-preview-to">{{ line.to }}</span>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </el-form-item>
+          </div>
+        </div>
+
+        <!-- 分区：更多设置。不影响连通性，默认收起。 -->
+        <div class="form-group" :class="{ 'is-open': forwardMoreOpen }">
+          <button type="button" class="form-group-head" @click="forwardMoreOpen = !forwardMoreOpen">
+            <span class="form-group-title">更多设置</span>
+            <span class="form-group-summary">{{ moreSummary }}</span>
+            <svg class="form-group-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
+          </button>
+          <div v-show="forwardMoreOpen" class="form-group-body">
+            <el-form-item label="备注">
+              <el-input
+                v-model="forwardForm.note"
+                maxlength="120"
+                show-word-limit
+                placeholder="一句话说明，例如「内网 HA 面板」"
+              />
+            </el-form-item>
+            <el-form-item label="分组">
+              <el-select
+                v-model="forwardForm.group"
+                filterable
+                allow-create
+                default-first-option
+                clearable
+                placeholder="留空即未分组；可直接输入新分组"
+                style="width: 100%"
+              >
+                <el-option v-for="g in groupOptions" :key="g" :label="g" :value="g" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="图标">
+              <div class="icon-edit">
+                <img v-if="forwardForm.icon" :src="forwardForm.icon" class="icon-thumb" alt="" />
+                <span v-else class="icon-thumb is-empty">自动</span>
+                <el-input v-model="iconUrl" placeholder="粘贴图标 URL 后点导入" />
+                <button
+                  class="btn"
+                  type="button"
+                  :disabled="iconBusy || !iconUrl.trim()"
+                  @click="importIconFromUrl"
+                >
+                  {{ iconBusy ? '导入中…' : '导入' }}
+                </button>
+                <label class="btn">
+                  本地文件
+                  <input type="file" accept="image/*" hidden @change="importIconFromFile" />
+                </label>
+                <button
+                  v-if="forwardForm.icon"
+                  class="btn"
+                  type="button"
+                  @click="forwardForm.icon = ''"
+                >
+                  清除
+                </button>
+                <InfoTip :content="iconHelp" />
+              </div>
+            </el-form-item>
+            <el-form-item label="添加到应用">
+              <el-switch v-model="forwardForm.in_app" />
+              <span class="hint" style="margin-left: 10px">
+                打开后出现在「应用」页，可以按分组摆放。
+              </span>
+            </el-form-item>
+          </div>
+        </div>
       </el-form>
       <template #footer>
         <div class="dialog-footer">
@@ -1552,5 +1886,218 @@ function tunnelDot(row: { server: { id: string } }): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+/* 输入框 + 行内「?」同排：气泡图标不能把控件挤到下一行 */
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+}
+
+.field-row > .el-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 端口框固定宽度：不参与 flex 收缩，否则「本地」「远端」两行会被末尾按钮挤成不同宽度 */
+.field-row > .el-input-number {
+  flex: 0 0 130px;
+}
+
+/* 占位：与 .btn.is-icon 的 32px 对齐 */
+.port-tool-spacer {
+  flex-shrink: 0;
+  width: 32px;
+}
+
+/* 拼在地址输入框里的协议选择器：去掉它自己的边框/底色/阴影，和 prepend 融为一体 */
+.field-row :deep(.el-input-group__prepend) {
+  padding: 0;
+  background: var(--el-fill-color-light);
+  border-radius: var(--el-border-radius-base) 0 0 var(--el-border-radius-base);
+}
+
+.prepend-select {
+  width: 96px;
+  height: 30px;
+  padding: 0 18px 0 10px;
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23909a9e' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6.5 8 10.5 12 6.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 5px center;
+  background-size: 12px 12px;
+  color: var(--el-text-color-regular);
+  font: inherit;
+  font-size: 12px;
+  appearance: none;
+  outline: none;
+  cursor: pointer;
+}
+
+/* 键盘聚焦时要看得见（原生 select 去掉 outline 后没有焦点反馈） */
+.prepend-select:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: -2px;
+  border-radius: 2px;
+}
+
+/* 域名/路径这类静态前缀：只占内容宽度，不参与输入 */
+.prepend-proto {
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+
+/* 纯 TCP 时没有远端协议可选，但仍占同样宽度，两行输入框才对得上 */
+.prepend-text {
+  display: inline-block;
+  width: 96px;
+  font-size: 12px;
+  line-height: 30px;
+  color: var(--el-text-color-secondary);
+  text-align: center;
+}
+
+/* 端口弹窗的可选分区：标题一行可点，右侧直接写当前值，收起时也不瞎 */
+.form-group {
+  margin: 2px 0 14px;
+}
+
+.form-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-regular);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.form-group-head:hover {
+  background: var(--el-fill-color);
+}
+
+.form-group-title {
+  font-weight: 600;
+}
+
+.form-group-summary {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--el-text-color-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.form-group-chevron {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  color: var(--el-text-color-secondary);
+  transition: transform 0.15s ease;
+}
+
+.form-group.is-open .form-group-chevron {
+  transform: rotate(90deg);
+}
+
+.form-group-body {
+  padding-top: 12px;
+}
+
+/* 头改写细则：几行控件 + 一张「浏览器 → 远端」对照表 */
+.rewrite-editor {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-fill-color-lighter);
+}
+
+.rewrite-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+/* 开关关闭时细则只读：控件变灰，但预览保持可读（用户就是要看这个） */
+.rewrite-editor.is-readonly {
+  background: var(--el-fill-color-light);
+}
+
+/* 标签列放得下「Location」：窄了会折成 Locatio / n */
+.rewrite-name {
+  flex-shrink: 0;
+  width: 68px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--el-text-color-secondary);
+}
+
+.rewrite-preview {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--el-border-color);
+  font-size: 12px;
+}
+
+.rewrite-preview-title {
+  margin-bottom: 6px;
+  color: var(--el-text-color-secondary);
+}
+
+.rewrite-preview-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.rewrite-preview-name {
+  flex-shrink: 0;
+  width: 150px;
+  color: var(--el-text-color-regular);
+  white-space: nowrap;
+}
+
+.rewrite-preview-from {
+  color: var(--el-text-color-secondary);
+}
+
+/* 原本就有的值才划掉；「—」表示浏览器没发这个头，划它没意义 */
+.rewrite-preview-row.is-from .rewrite-preview-from {
+  text-decoration: line-through;
+}
+
+.rewrite-preview-arrow {
+  color: var(--el-text-color-placeholder);
+}
+
+.rewrite-preview-to {
+  color: var(--el-color-primary);
+  word-break: break-all;
+}
+
+/* 不发送/不改写的行：整行变淡，用一句话说清楚，不画箭头 */
+.rewrite-preview-row.is-off {
+  opacity: 0.6;
+}
+
+.rewrite-preview-note {
+  color: var(--el-text-color-secondary);
 }
 </style>

@@ -25,6 +25,7 @@ use tokio_rustls::TlsAcceptor;
 
 use super::traffic::Traffic;
 use crate::foundation::tls_ca::GatewayCa;
+use tl_protocol::HeaderRewrite;
 
 /// 单隧道并发上限（超出的本地连接立即关闭，不排队）。
 const MAX_CONNECTIONS: usize = 64;
@@ -559,6 +560,9 @@ impl rustls::server::ResolvesServerCert for GatewayResolver {
 ///
 /// 出口由 `upstream` 决定：`Ssh` 走已建立的会话（多条转发共用同一个 handle），
 /// `Direct` 直接连本机端口。其余管线——accept →（可选 TLS 终止）→ 双向搬运——完全一致。
+///
+/// `rewrite_http` 由模型层判定（`models::tunnel::http_rewrite_enabled`）：引擎不自己猜
+/// 「该不该改 Host」——① 明文直通没有 `entry_tls`，但同样能看到明文、同样可以改写。
 // 这层是"把运行时状态一路传下去"的管线，参数天然多；拆结构体反而更难读。
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_listener(
@@ -571,6 +575,7 @@ pub async fn serve_listener(
     on_error: Box<dyn Fn(String) + Send + Sync>,
     traffic: Arc<Traffic>,
     entry_tls: Option<TlsAcceptor>,
+    rewrite: Option<HeaderRewrite>,
     public_domain: Option<String>,
 ) -> (EngineOutcome, TcpListener) {
     let outcome = serve_listener_inner(
@@ -583,6 +588,7 @@ pub async fn serve_listener(
         on_error,
         traffic,
         entry_tls.as_ref(),
+        rewrite,
         public_domain.as_deref(),
     )
     .await;
@@ -601,10 +607,17 @@ async fn serve_listener_inner(
     on_error: Box<dyn Fn(String) + Send + Sync>,
     traffic: Arc<Traffic>,
     entry_tls: Option<&TlsAcceptor>,
+    rewrite: Option<HeaderRewrite>,
     public_domain: Option<&str>,
 ) -> EngineOutcome {
     let on_error = Arc::new(on_error);
     let inflight = Arc::new(AtomicUsize::new(0));
+    // 浏览器那一侧的实际协议：终止了 TLS 就是 https（②），否则是 http（①）。
+    // 只影响 `X-Forwarded-Proto` 与 Location 回写的协议头，不影响是否改写。
+    let rewrite_spec = rewrite.map(|rules| RewriteSpec {
+        proto: if entry_tls.is_some() { "https" } else { "http" },
+        rules: Arc::new(rules),
+    });
     // keepalive 是 SSH 会话的健康检查：本机直连没有会话可查，不装这只表。
     let session = match &upstream {
         Upstream::Ssh(handle) => Some(Arc::clone(handle)),
@@ -685,8 +698,8 @@ async fn serve_listener_inner(
                 let target = (remote_host.clone(), remote_port);
                 let traffic = Arc::clone(&traffic);
                 // 引用不能进 'static 任务，先落成拥有所有权的值
-                let rewrite_http = entry_tls.is_some();
                 let public_fallback = public_domain.map(str::to_string);
+                let rewrite_spec = rewrite_spec.clone();
                 tokio::spawn(async move {
                     // 连不上目标端口时错误必须上报，否则界面只表现为"连接被重置"。
                     let result = match upstream {
@@ -696,7 +709,7 @@ async fn serve_listener_inner(
                                 target.clone(),
                                 inbound,
                                 traffic,
-                                rewrite_http,
+                                rewrite_spec,
                                 public_fallback,
                             )
                             .await
@@ -706,7 +719,7 @@ async fn serve_listener_inner(
                                 target.clone(),
                                 inbound,
                                 traffic,
-                                rewrite_http,
+                                rewrite_spec,
                                 public_fallback,
                             )
                             .await
@@ -995,7 +1008,7 @@ async fn forward_one<S>(
     target: (String, u16),
     inbound: S,
     traffic: Arc<Traffic>,
-    rewrite_http: bool,
+    rewrite: Option<RewriteSpec>,
     public_fallback: Option<String>,
 ) -> Result<(), std::io::Error>
 where
@@ -1025,7 +1038,7 @@ where
         target,
         inbound,
         traffic,
-        rewrite_http,
+        rewrite,
         public_fallback,
     )
     .await
@@ -1039,7 +1052,7 @@ async fn forward_direct<S>(
     (remote_host, remote_port): (String, u16),
     inbound: S,
     traffic: Arc<Traffic>,
-    rewrite_http: bool,
+    rewrite: Option<RewriteSpec>,
     public_fallback: Option<String>,
 ) -> Result<(), std::io::Error>
 where
@@ -1064,7 +1077,7 @@ where
         (remote_host, remote_port),
         inbound,
         traffic,
-        rewrite_http,
+        rewrite,
         public_fallback,
     )
     .await
@@ -1079,7 +1092,7 @@ async fn pipe_through<O, S>(
     (remote_host, remote_port): (String, u16),
     inbound: S,
     traffic: Arc<Traffic>,
-    rewrite_http: bool,
+    rewrite: Option<RewriteSpec>,
     public_fallback: Option<String>,
 ) -> Result<(), std::io::Error>
 where
@@ -1101,14 +1114,17 @@ where
     // copy_bidirectional 只在结束时给出总数，界面上就永远看不到"正在跑"的速率。
     // 拆成两条单方向搬运，边读边累加，计数器随时可读。
     //
-    // TLS 终结的连接额外做一次 HTTP 头改写（见 `pipe_http`）：只有这里能看见明文。
+    // 需要改写时才做一次 HTTP 头改写（见 `pipe_http`）：开关由模型层给，
+    // 只有能看到明文的入口（① 明文直通 / ② 本地解密）才可能打开。
     //
     // 域名是本机的约定：上行把 Host 换成远端地址，远端就不会把 `deva.zly.m`
     // 写进它生成的重定向；下行再把指向远端的 Location 换回浏览器访问的地址。
     let observed = Arc::new(std::sync::Mutex::new(None::<String>));
-    let rewrite = rewrite_http.then(|| HttpRewrite {
+    let rewrite = rewrite.map(|spec| HttpRewrite {
         upstream_host,
         authority,
+        proto: spec.proto,
+        rules: spec.rules,
         fallback: public_fallback.clone(),
         observed: Arc::clone(&observed),
     });
@@ -1131,6 +1147,13 @@ where
     Ok(())
 }
 
+/// 一次改写的完整参数：入口协议由引擎判定，细则来自配置。
+#[derive(Clone)]
+struct RewriteSpec {
+    proto: &'static str,
+    rules: Arc<HeaderRewrite>,
+}
+
 /// 一次 HTTP 头改写的上下文：两个方向共用一个 `observed`，上行写、下行读。
 #[derive(Clone)]
 struct HttpRewrite {
@@ -1138,6 +1161,10 @@ struct HttpRewrite {
     upstream_host: String,
     /// 上行 `Host` 的值：80/443 是默认端口，写出来是噪音
     authority: String,
+    /// 浏览器那一侧用的协议：`https`（② 终止）或 `http`（① 明文直通）
+    proto: &'static str,
+    /// 用户配的改写细则（Host 目标 / X-Forwarded 开关 / Location 开关 / 自定义头）
+    rules: Arc<HeaderRewrite>,
     /// 请求没带 Host 时的兜底（配置里的域名）
     fallback: Option<String>,
     /// 浏览器实际请求的 Host，上行解析出来后填进来
@@ -1187,17 +1214,19 @@ fn find_head_end(bytes: &[u8]) -> Option<usize> {
 
 /// 改写第一块 HTTP 头，协议之外的内容一律不动。
 ///
-/// - 请求方向：`Host` 换成远端地址（本机域名不出本机），并补
-///   `X-Forwarded-Proto: https`、`X-Forwarded-Host: <浏览器用的主机名>`。
+/// - 请求方向：按 `rules.host` 处理 `Host`（自动换远端地址 / 保留原值 / 自定义），
+///   按 `rules.forward_headers` 决定是否补 `X-Forwarded-Proto`、`X-Forwarded-Host`，
+///   最后追加 `rules.extra` 里的自定义头（同名覆盖）。
 ///   同时把浏览器用的主机名记进 `observed`，供响应方向使用。
-/// - 响应方向：`Location` 指向远端地址时，换回浏览器访问的那个地址（https）。
-///   第三方地址一律不动。
+/// - 响应方向：`rules.rewrite_location` 打开时，`Location` 指向远端地址就换回浏览器访问的
+///   地址（同名协议）；第三方地址一律不动。
 ///
 /// 非 HTTP 流量（首行不含 `HTTP/`）原样返回。
 fn rewrite_head(head: &[u8], ctx: &HttpRewrite, request: bool) -> Vec<u8> {
     let text = String::from_utf8_lossy(head);
     let mut lines: Vec<String> = text.split("\r\n").map(str::to_string).collect();
     let first = lines.first().cloned().unwrap_or_default();
+    let rules = ctx.rules.as_ref();
 
     if request {
         if !first.contains(" HTTP/") {
@@ -1212,26 +1241,53 @@ fn rewrite_head(head: &[u8], ctx: &HttpRewrite, request: bool) -> Vec<u8> {
                 if let Some(colon) = line.find(':') {
                     host_seen = Some(line[colon + 1..].trim().to_string());
                 }
-                *line = format!("Host: {}", ctx.authority);
+                match rules.host.as_deref() {
+                    // 自动：换成远端地址（80/443 不带端口）
+                    None => *line = format!("Host: {}", ctx.authority),
+                    // 显式空串 = 保留浏览器带来的原值
+                    Some("") => {}
+                    Some(custom) => *line = format!("Host: {custom}"),
+                }
             } else if lower.starts_with("x-forwarded-proto:") {
-                *line = "X-Forwarded-Proto: https".to_string();
+                if rules.forward_headers {
+                    *line = format!("X-Forwarded-Proto: {}", ctx.proto);
+                }
                 proto_seen = true;
             } else if lower.starts_with("x-forwarded-host:") {
                 forwarded_seen = true;
             }
         }
         let mut extra = Vec::new();
-        if !proto_seen {
-            extra.push("X-Forwarded-Proto: https".to_string());
+        if rules.forward_headers {
+            if !proto_seen {
+                extra.push(format!("X-Forwarded-Proto: {}", ctx.proto));
+            }
+            if let Some(host) = &host_seen {
+                if !forwarded_seen {
+                    extra.push(format!("X-Forwarded-Host: {host}"));
+                }
+            }
         }
         if let Some(host) = &host_seen {
-            if !forwarded_seen {
-                extra.push(format!("X-Forwarded-Host: {host}"));
-            }
             if let Ok(mut slot) = ctx.observed.lock() {
                 if slot.is_none() {
                     *slot = Some(host.clone());
                 }
+            }
+        }
+        // 自定义头：同名覆盖（第一处），否则追加到头块末尾
+        for pair in &rules.extra {
+            let prefix = format!("{}:", pair.name.to_ascii_lowercase());
+            let mut replaced = false;
+            for line in lines.iter_mut().skip(1) {
+                if line.to_ascii_lowercase().starts_with(&prefix) {
+                    *line = format!("{}: {}", pair.name, pair.value);
+                    replaced = true;
+                    break;
+                }
+            }
+            if !replaced {
+                extra.push(format!("{}: {}", pair.name, pair.value));
             }
         }
         if !extra.is_empty() {
@@ -1240,7 +1296,7 @@ fn rewrite_head(head: &[u8], ctx: &HttpRewrite, request: bool) -> Vec<u8> {
             }
         }
     } else {
-        if !first.starts_with("HTTP/") {
+        if !first.starts_with("HTTP/") || !rules.rewrite_location {
             return head.to_vec();
         }
         let Some(public) = ctx.public_host() else {
@@ -1255,7 +1311,11 @@ fn rewrite_head(head: &[u8], ctx: &HttpRewrite, request: bool) -> Vec<u8> {
                 continue;
             };
             let value = line[colon + 1..].trim();
-            let Some(rest) = value.strip_prefix("http://") else {
+            // 远端可能因为收到 X-Forwarded-Proto 而生成 https 链接，两种都要认
+            let Some(rest) = value
+                .strip_prefix("http://")
+                .or_else(|| value.strip_prefix("https://"))
+            else {
                 continue;
             };
             let (authority, path) = match rest.find('/') {
@@ -1263,9 +1323,16 @@ fn rewrite_head(head: &[u8], ctx: &HttpRewrite, request: bool) -> Vec<u8> {
                 None => (rest, ""),
             };
             let ours = authority.eq_ignore_ascii_case(&ctx.authority)
-                || authority.eq_ignore_ascii_case(&ctx.upstream_host);
+                || authority.eq_ignore_ascii_case(&ctx.upstream_host)
+                // 自定义 Host 时，远端可能拿这个值当自己的名字生成 Location：
+                // 那条也要换回浏览器地址，否则会跳到一个只在远端成立的名字上。
+                || rules
+                    .host
+                    .as_deref()
+                    .filter(|host| !host.is_empty())
+                    .is_some_and(|host| authority.eq_ignore_ascii_case(host));
             if ours {
-                *line = format!("Location: https://{public}{path}");
+                *line = format!("Location: {}://{public}{path}", ctx.proto);
             }
         }
     }
@@ -1355,6 +1422,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tl_protocol::HeaderPair;
     use tokio::net::TcpStream;
 
     /// 本机出口：不经任何会话，直接把入口字节搬到本机端口，并且**不留心跳**。
@@ -1393,6 +1461,7 @@ mod tests {
                 traffic,
                 None,
                 None,
+                None,
             )
             .await
         });
@@ -1408,12 +1477,180 @@ mod tests {
         assert_eq!(outcome, EngineOutcome::Stopped);
     }
 
+    /// 开关必须在管道里真正生效：关 = `Host` 原样透传，开 = 换成远端地址。
+    ///
+    /// 只测引擎这一段接线（`serve_listener` 的布尔 → `HttpRewrite`），不依赖 SSH：
+    /// 目标用一个回显本机端口，入口发一条真实 HTTP 请求，比对远端收到的字节。
+    #[tokio::test]
+    async fn http_rewrite_switch_controls_host_header_on_the_wire() {
+        async fn run(rewrite: bool) -> String {
+            let target = TcpListener::bind("127.0.0.1:0").await.expect("target");
+            let target_addr = target.local_addr().expect("target addr");
+            tokio::spawn(async move {
+                if let Ok((mut socket, _)) = target.accept().await {
+                    let mut buf = vec![0u8; 1024];
+                    if let Ok(n) = socket.read(&mut buf).await {
+                        let _ = socket.write_all(&buf[..n]).await;
+                    }
+                }
+            });
+
+            let entry = TcpListener::bind("127.0.0.1:0").await.expect("entry");
+            let entry_addr = entry.local_addr().expect("entry addr");
+            let (shutdown, shutdown_rx) = watch::channel(false);
+            let serve = tokio::spawn(async move {
+                serve_listener(
+                    entry,
+                    Upstream::Direct,
+                    target_addr.ip().to_string(),
+                    target_addr.port(),
+                    0,
+                    shutdown_rx,
+                    Box::new(|_| {}),
+                    Arc::new(Traffic::default()),
+                    None,
+                    rewrite.then(HeaderRewrite::default),
+                    Some("home.zly.m".to_string()),
+                )
+                .await
+            });
+
+            let mut client = TcpStream::connect(entry_addr).await.expect("connect entry");
+            client
+                .write_all(b"GET / HTTP/1.1\r\nHost: home.zly.m\r\n\r\n")
+                .await
+                .expect("write");
+            let mut buf = vec![0u8; 1024];
+            let n = tokio::time::timeout(Duration::from_secs(5), client.read(&mut buf))
+                .await
+                .expect("read timeout")
+                .expect("read");
+            shutdown.send(true).expect("shutdown");
+            let _ = serve.await;
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        }
+
+        let plain = run(false).await;
+        assert!(
+            plain.contains("Host: home.zly.m"),
+            "关闭时必须原样透传：{plain}"
+        );
+        assert!(
+            !plain.contains("X-Forwarded-Proto"),
+            "关闭时不该补头：{plain}"
+        );
+
+        let rewritten = run(true).await;
+        // 精确到整行：`X-Forwarded-Host` 里保留域名是设计内的
+        assert!(
+            !rewritten.contains("\r\nHost: home.zly.m\r\n"),
+            "打开时域名不该留在 Host：{rewritten}"
+        );
+        assert!(rewritten.contains("Host: 127.0.0.1:"), "{rewritten}");
+        // ① 明文直通的入口协议是 http，不能谎报 https
+        assert!(rewritten.contains("X-Forwarded-Proto: http"), "{rewritten}");
+    }
+
+    /// 细则怎么落到头上：Host 三态、X-Forwarded 开关、自定义头覆盖/追加、Location 开关。
+    #[test]
+    fn custom_rules_shape_the_request_head() {
+        let head = b"GET / HTTP/1.1\r\nHost: home.zly.m\r\nX-Custom: old\r\n\r\n";
+
+        // 保留浏览器原 Host + 关掉 X-Forwarded + 自定义头：同名覆盖、新名追加
+        let ctx = rewrite_ctx_with(HeaderRewrite {
+            host: Some(String::new()),
+            forward_headers: false,
+            rewrite_location: true,
+            extra: vec![
+                HeaderPair {
+                    name: "X-Custom".into(),
+                    value: "new".into(),
+                },
+                HeaderPair {
+                    name: "X-Trace".into(),
+                    value: "1".into(),
+                },
+            ],
+        });
+        let out = String::from_utf8(rewrite_head(head, &ctx, true)).expect("utf8");
+        assert!(out.contains("\r\nHost: home.zly.m\r\n"), "{out}");
+        assert!(!out.contains("X-Forwarded-Proto"), "{out}");
+        assert!(out.contains("\r\nX-Custom: new\r\n"), "{out}");
+        assert!(out.contains("\r\nX-Trace: 1\r\n"), "{out}");
+        assert!(!out.contains("X-Custom: old"), "{out}");
+
+        // 自定义 Host 目标
+        let ctx = rewrite_ctx_with(HeaderRewrite {
+            host: Some("edge.example.com".into()),
+            ..Default::default()
+        });
+        let out = String::from_utf8(rewrite_head(head, &ctx, true)).expect("utf8");
+        assert!(out.contains("\r\nHost: edge.example.com\r\n"), "{out}");
+
+        // Location 回写开关：默认开（换成浏览器地址），关掉则原样
+        let resp = b"HTTP/1.1 302 Found\r\nLocation: http://192.168.28.98:8080/x\r\n\r\n";
+        let ctx = rewrite_ctx(Some("home.zly.m"), Some("home.zly.m"));
+        let out = String::from_utf8(rewrite_head(resp, &ctx, false)).expect("utf8");
+        assert!(out.contains("Location: https://home.zly.m/x"), "{out}");
+
+        let mut off = ctx.clone();
+        off.rules = Arc::new(HeaderRewrite {
+            rewrite_location: false,
+            ..Default::default()
+        });
+        let out = String::from_utf8(rewrite_head(resp, &off, false)).expect("utf8");
+        assert!(
+            out.contains("Location: http://192.168.28.98:8080/x"),
+            "关掉后不该动 Location：{out}"
+        );
+    }
+
+    /// 远端相信 `X-Forwarded-Proto` 之后会生成 `https://` 链接（框架的常见行为），
+    /// 这类 Location 同样要换回浏览器访问的地址。
+    #[test]
+    fn location_rewrite_accepts_https_urls_from_the_remote() {
+        let resp = b"HTTP/1.1 302 Found\r\nLocation: https://192.168.28.98:8080/next\r\n\r\n";
+        let ctx = rewrite_ctx(Some("home.zly.m"), Some("home.zly.m"));
+        let out = String::from_utf8(rewrite_head(resp, &ctx, false)).expect("utf8");
+        assert!(
+            out.contains("Location: https://home.zly.m/next"),
+            "https 的 Location 也要换回来：{out}"
+        );
+    }
+
+    /// 自定义 Host 之后，远端可能拿这个值当自己的名字生成 302：
+    /// 那种 Location 也必须换回浏览器访问的地址，否则浏览器会去访问一个只在远端成立的名字。
+    #[test]
+    fn location_rewrite_follows_the_custom_host() {
+        let resp = b"HTTP/1.1 302 Found\r\nLocation: http://edge.example.com/next\r\n\r\n";
+        let mut ctx = rewrite_ctx_with(HeaderRewrite {
+            host: Some("edge.example.com".into()),
+            ..Default::default()
+        });
+        ctx.observed = Arc::new(std::sync::Mutex::new(Some("home.zly.m".to_string())));
+        let out = String::from_utf8(rewrite_head(resp, &ctx, false)).expect("utf8");
+        assert!(
+            out.contains("Location: https://home.zly.m/next"),
+            "custom Host 的 Location 也要换回来：{out}"
+        );
+    }
+
     fn rewrite_ctx(observed: Option<&str>, fallback: Option<&str>) -> HttpRewrite {
         HttpRewrite {
             upstream_host: "192.168.28.98".to_string(),
             authority: "192.168.28.98:8080".to_string(),
+            proto: "https",
+            rules: Arc::new(HeaderRewrite::default()),
             fallback: fallback.map(str::to_string),
             observed: Arc::new(std::sync::Mutex::new(observed.map(str::to_string))),
+        }
+    }
+
+    /// 带自定义细则的上下文。
+    fn rewrite_ctx_with(rules: HeaderRewrite) -> HttpRewrite {
+        HttpRewrite {
+            rules: Arc::new(rules),
+            ..rewrite_ctx(None, None)
         }
     }
 
@@ -1446,6 +1683,21 @@ mod tests {
             b"HTTP/1.1 302 Found\r\nLocation: http://192.168.28.98:8080/login\r\nContent-Length: 0\r\n\r\n";
         let out = String::from_utf8(rewrite_head(head, &ctx, false)).expect("utf8");
         assert!(out.contains("Location: https://deva.zly.m/login"), "{out}");
+    }
+
+    #[test]
+    fn plaintext_entry_reports_http_not_https() {
+        // ① 明文直通：浏览器那一侧是 http，不能谎报 https
+        let mut ctx = rewrite_ctx(None, None);
+        ctx.proto = "http";
+        let head = b"GET / HTTP/1.1\r\nHost: home.zly.m\r\n\r\n";
+        let out = String::from_utf8(rewrite_head(head, &ctx, true)).expect("utf8");
+        assert!(out.contains("X-Forwarded-Proto: http"), "{out}");
+        assert!(!out.contains("X-Forwarded-Proto: https"), "{out}");
+
+        let resp = b"HTTP/1.1 302 Found\r\nLocation: http://192.168.28.98:8080/x\r\n\r\n";
+        let out = String::from_utf8(rewrite_head(resp, &ctx, false)).expect("utf8");
+        assert!(out.contains("Location: http://home.zly.m/x"), "{out}");
     }
 
     #[test]

@@ -27,8 +27,8 @@ use tokio::sync::broadcast;
 
 use anyhow::{anyhow, Result};
 use tl_protocol::{
-    CreateTunnelRequest, PatchTunnelRequest, TunnelDto, TunnelList, TunnelState, TunnelStatus,
-    TunnelView, TunnelsFile,
+    CreateTunnelRequest, HeaderPair, HeaderRewrite, PatchTunnelRequest, TunnelDto, TunnelList,
+    TunnelState, TunnelStatus, TunnelView, TunnelsFile,
 };
 
 use crate::foundation::store;
@@ -137,6 +137,90 @@ pub fn validate_domain(raw: &str) -> Result<String> {
         }
     }
     Ok(d)
+}
+
+/// 是否对 HTTP 头做改写（唯一口径，引擎不自己判断）。
+///
+/// 三个条件同时成立：开关打开、有域名入口、入口能看到明文
+/// （① `http→http` 明文直通 / ② `https→http` 本地解密）。
+/// ③ HTTPS 透传读到的是 TLS 密文；`tcp/rdp/ssh` 没有 HTTP 语义——都改不了。
+pub fn http_rewrite_enabled(def: &TunnelDto) -> bool {
+    if !def.rewrite_http_headers || def.domain.is_empty() {
+        return false;
+    }
+    match entry_mode(def) {
+        Ok(EntryMode::Terminate) => true,
+        Ok(EntryMode::Plain) => def.scheme == "http",
+        Ok(EntryMode::Passthrough) | Err(_) => false,
+    }
+}
+
+/// 改写细则：开关不生效时返回 `None`，引擎据此退化成纯字节管道。
+///
+/// 判定只走 `http_rewrite_enabled`，细则本身不参与「该不该改写」的判断。
+pub fn http_rewrite_spec(def: &TunnelDto) -> Option<HeaderRewrite> {
+    http_rewrite_enabled(def).then(|| def.header_rewrite.clone())
+}
+
+/// 自定义头最多几条：够用，且不让一条恶意配置撑爆头块。
+const MAX_EXTRA_HEADERS: usize = 32;
+/// 头名/头值的长度上限（HTTP 实务里的常见预算）。
+const MAX_HEADER_NAME: usize = 64;
+const MAX_HEADER_VALUE: usize = 1024;
+
+/// 头名必须是 RFC 7230 的 token：出错时拒绝保存，别把畸形头写到线上。
+fn is_header_token(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+}
+
+/// 规范化头改写细则：Trim、校验、限长；空名跳过，非法名/含换行的值报错。
+fn normalize_header_rewrite(raw: HeaderRewrite) -> Result<HeaderRewrite> {
+    let host = match raw.host {
+        None => None,
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                // 空串是「保留浏览器原 Host」的显式表达，不是「自动」
+                Some(String::new())
+            } else if trimmed.chars().any(|c| c.is_control() || c == ' ') {
+                return Err(anyhow!("Host 目标不能含空格或控制字符"));
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+    };
+
+    let mut extra = Vec::new();
+    for pair in raw.extra.into_iter().take(MAX_EXTRA_HEADERS) {
+        let name = pair.name.trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        if name.len() > MAX_HEADER_NAME || !is_header_token(&name) {
+            return Err(anyhow!("自定义头名不合法：{name}"));
+        }
+        if name.eq_ignore_ascii_case("host") {
+            return Err(anyhow!("Host 请用上面的「Host 目标」设置，不要重复添加"));
+        }
+        let value = pair.value.trim().to_string();
+        if value.len() > MAX_HEADER_VALUE || value.chars().any(|c| c.is_control()) {
+            return Err(anyhow!(
+                "自定义头 {} 的值不合法（不能含换行/控制字符）",
+                name
+            ));
+        }
+        extra.push(HeaderPair { name, value });
+    }
+
+    Ok(HeaderRewrite {
+        host,
+        forward_headers: raw.forward_headers,
+        rewrite_location: raw.rewrite_location,
+        extra,
+    })
 }
 
 /// 规范化 `remote_scheme`：空 / `auto` → `None`（回到由 `scheme` 推导）。
@@ -297,6 +381,8 @@ impl TunnelStore {
             domain,
             domain_host,
             remote_scheme: normalize_remote_scheme(req.remote_scheme)?,
+            rewrite_http_headers: req.rewrite_http_headers,
+            header_rewrite: normalize_header_rewrite(req.header_rewrite.unwrap_or_default())?,
             icon: normalize_icon(&req.icon)?,
             group: normalize_group(&req.group)?,
             in_app: req.in_app,
@@ -403,6 +489,12 @@ impl TunnelStore {
         }
         if let Some(v) = req.remote_scheme {
             candidate.remote_scheme = normalize_remote_scheme(Some(v))?;
+        }
+        if let Some(v) = req.rewrite_http_headers {
+            candidate.rewrite_http_headers = v;
+        }
+        if let Some(v) = req.header_rewrite {
+            candidate.header_rewrite = normalize_header_rewrite(v)?;
         }
         if let Some(v) = req.icon {
             candidate.icon = normalize_icon(&v)?;
@@ -587,6 +679,8 @@ impl TunnelStore {
             domain,
             domain_host,
             remote_scheme: None,
+            rewrite_http_headers: false,
+            header_rewrite: Default::default(),
             icon: String::new(),
             group: String::new(),
             in_app: true,
@@ -1040,6 +1134,8 @@ mod tests {
             auto_start: false,
             domain: String::new(),
             remote_scheme: None,
+            rewrite_http_headers: false,
+            header_rewrite: Default::default(),
             icon: String::new(),
             group: String::new(),
             in_app: true,
@@ -1258,6 +1354,8 @@ mod tests {
             domain: String::new(),
             domain_host: String::new(),
             remote_scheme: None,
+            rewrite_http_headers: false,
+            header_rewrite: Default::default(),
             icon: String::new(),
             group: String::new(),
             in_app: true,
@@ -1703,6 +1801,157 @@ mod tests {
         assert_eq!(dto.domain, "");
         assert_eq!(dto.remote_scheme, None);
         assert_eq!(entry_mode(&dto).unwrap(), EntryMode::Plain);
+    }
+
+    #[test]
+    fn http_rewrite_needs_switch_plaintext_and_domain() {
+        let mut dto: TunnelDto = serde_json::from_str(
+            r#"{"id":"t","name":"x","server_id":"s","local_host":"127.0.0.1",
+                "local_port":443,"remote_host":"127.0.0.1","remote_port":80,
+                "auto_start":false,"scheme":"https","remote_scheme":"http",
+                "domain":"home.example.com","domain_host":"127.0.0.5"}"#,
+        )
+        .expect("parse");
+
+        // 默认关闭：老配置缺字段时不该开始改写
+        assert!(!dto.rewrite_http_headers);
+        assert!(!http_rewrite_enabled(&dto));
+
+        // ② https→http 本地解密：能看到明文，开关打开即生效
+        dto.rewrite_http_headers = true;
+        assert!(http_rewrite_enabled(&dto));
+
+        // ① http→http 明文直通同样能看到明文
+        let mut plain = dto.clone();
+        plain.scheme = "http".into();
+        plain.remote_scheme = None;
+        assert_eq!(entry_mode(&plain).unwrap(), EntryMode::Plain);
+        assert!(http_rewrite_enabled(&plain));
+
+        // ③ https→https 透传：读到的是 TLS 密文，开关打开也不生效
+        let mut pass = dto.clone();
+        pass.remote_scheme = None;
+        assert_eq!(entry_mode(&pass).unwrap(), EntryMode::Passthrough);
+        assert!(!http_rewrite_enabled(&pass));
+
+        // tcp / rdp / ssh：没有 HTTP 语义
+        let mut tcp = dto.clone();
+        tcp.scheme = "tcp".into();
+        assert!(!http_rewrite_enabled(&tcp));
+
+        // 没有域名入口时永远是纯字节管道
+        let mut no_domain = dto.clone();
+        no_domain.domain.clear();
+        assert!(!http_rewrite_enabled(&no_domain));
+    }
+
+    #[test]
+    fn rewrite_switch_is_persisted_and_patchable() {
+        let f = fixture("rewrite-persist");
+        let mut req = create_req("rw", &f.server_id, 18101);
+        req.scheme = "https".into();
+        req.remote_scheme = Some("http".into());
+        req.domain = "home.example.com".into();
+        req.rewrite_http_headers = true;
+        let created = f.tunnels.create(req).expect("create");
+        assert!(
+            f.tunnels
+                .view(&created.id)
+                .expect("view")
+                .definition
+                .rewrite_http_headers
+        );
+
+        f.tunnels
+            .patch(
+                &created.id,
+                PatchTunnelRequest {
+                    rewrite_http_headers: Some(false),
+                    header_rewrite: Default::default(),
+                    ..Default::default()
+                },
+            )
+            .expect("patch");
+        assert!(
+            !f.tunnels
+                .view(&created.id)
+                .expect("view")
+                .definition
+                .rewrite_http_headers
+        );
+
+        // 老配置缺字段 = 不改写（默认关）
+        let legacy: TunnelDto = serde_json::from_str(
+            r#"{"id":"t","name":"x","server_id":"s","local_host":"127.0.0.1",
+                "local_port":1,"remote_host":"127.0.0.1","remote_port":80,
+                "auto_start":false,"scheme":"https","remote_scheme":"http",
+                "domain":"home.example.com","domain_host":"127.0.0.5"}"#,
+        )
+        .expect("parse legacy");
+        assert!(!legacy.rewrite_http_headers);
+    }
+
+    #[test]
+    fn header_rewrite_rules_are_normalized_and_persisted() {
+        let f = fixture("rewrite-rules");
+        let mut req = create_req("rules", &f.server_id, 18111);
+        req.scheme = "https".into();
+        req.remote_scheme = Some("http".into());
+        req.domain = "home.example.com".into();
+        req.rewrite_http_headers = true;
+        req.header_rewrite = Some(HeaderRewrite {
+            host: Some("  edge.example.com  ".into()),
+            forward_headers: false,
+            rewrite_location: false,
+            extra: vec![
+                HeaderPair {
+                    name: " X-Trace ".into(),
+                    value: " 1 ".into(),
+                },
+                // 空名 = 界面上刚点「添加」还没填，跳过而不是报错
+                HeaderPair {
+                    name: "   ".into(),
+                    value: "ignored".into(),
+                },
+            ],
+        });
+        let created = f.tunnels.create(req).expect("create");
+        let rules = f
+            .tunnels
+            .view(&created.id)
+            .expect("view")
+            .definition
+            .header_rewrite;
+        assert_eq!(rules.host.as_deref(), Some("edge.example.com"));
+        assert!(!rules.forward_headers);
+        assert!(!rules.rewrite_location);
+        assert_eq!(rules.extra.len(), 1, "空名应当被跳过");
+        assert_eq!(rules.extra[0].name, "X-Trace");
+        assert_eq!(rules.extra[0].value, "1");
+
+        // 非法头名（含空格）直接拒绝保存，不让畸形头上线
+        let mut bad = create_req("bad-header", &f.server_id, 18112);
+        bad.scheme = "http".into();
+        bad.domain = "bad.example.com".into();
+        bad.header_rewrite = Some(HeaderRewrite {
+            extra: vec![HeaderPair {
+                name: "X Bad".into(),
+                value: "1".into(),
+            }],
+            ..Default::default()
+        });
+        assert!(f.tunnels.create(bad).is_err());
+
+        // 老 JSON 缺字段 = 全默认（自动 Host、补 X-Forwarded、回写 Location、无自定义头）
+        let legacy: TunnelDto = serde_json::from_str(
+            r#"{"id":"t","name":"x","server_id":"s","local_host":"127.0.0.1",
+                "local_port":443,"remote_host":"127.0.0.1","remote_port":80,
+                "auto_start":false,"scheme":"https","domain":"home.example.com",
+                "domain_host":"127.0.0.5","rewrite_http_headers":true}"#,
+        )
+        .expect("parse legacy");
+        assert_eq!(legacy.header_rewrite, HeaderRewrite::default());
+        assert!(legacy.header_rewrite.forward_headers);
     }
 
     #[test]

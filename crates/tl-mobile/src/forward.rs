@@ -133,7 +133,8 @@ pub fn start_forward(req: ForwardRequest) -> Result<Arc<Forward>, MobileError> {
     };
 
     runtime().spawn(async move {
-        // 入口 TLS / 域名在安卓端首发不做（见设计「HTTPS 三格」），两个 `None` 是这一决定的出口。
+        // 入口 TLS / 域名 / HTTP 头改写在安卓端首发都不做（见设计「HTTPS 三格」），
+        // 两个 `None` 与 `false` 是这一决定的出口。
         let (outcome, _listener) = engine::serve_listener(
             listener,
             Upstream::Ssh(session),
@@ -143,6 +144,7 @@ pub fn start_forward(req: ForwardRequest) -> Result<Arc<Forward>, MobileError> {
             task_stop_rx,
             on_error,
             task_traffic,
+            None,
             None,
             None,
         )

@@ -47,7 +47,9 @@ fn build_entry_tls(
 use crate::models::credential::{CredentialMaterial, CredentialStore};
 use crate::models::server::{is_local, ServerStore};
 use crate::models::tunnel::engine::{self, Login, ServeConfig, SessionHandle, Upstream};
-use crate::models::tunnel::{effective_addr, entry_mode, fsm::TunnelEvent, EntryMode, TunnelStore};
+use crate::models::tunnel::{
+    effective_addr, entry_mode, fsm::TunnelEvent, http_rewrite_spec, EntryMode, TunnelStore,
+};
 
 struct Running {
     cancel: watch::Sender<bool>,
@@ -686,6 +688,7 @@ impl TunnelRunner {
                 on_error,
                 std::sync::Arc::clone(&traffic),
                 entry_tls,
+                http_rewrite_spec(&def),
                 {
                     let domain = def.domain.trim();
                     if domain.is_empty() {
@@ -793,6 +796,7 @@ impl TunnelRunner {
             on_error,
             traffic,
             entry_tls,
+            http_rewrite_spec(&def),
             if domain.is_empty() {
                 None
             } else {
@@ -919,6 +923,8 @@ mod tests {
                 domain: String::new(),
                 domain_host: String::new(),
                 remote_scheme: None,
+                rewrite_http_headers: false,
+                header_rewrite: Default::default(),
                 icon: String::new(),
                 group: String::new(),
                 in_app: true,
@@ -1030,6 +1036,8 @@ mod tests {
                 scheme: "tcp".into(),
                 domain: String::new(),
                 remote_scheme: None,
+                rewrite_http_headers: false,
+                header_rewrite: Default::default(),
                 icon: String::new(),
                 group: String::new(),
                 in_app: true,
@@ -1071,6 +1079,173 @@ mod tests {
             TunnelState::Stopped
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 域名入口的「HTTP 头改写」开关必须一路生效：模型判定 → 业务传参 → 引擎改写 → 真正发到远端。
+    ///
+    /// 走真实的 `TunnelRunner::start`（本机出口，不建 SSH 会话）：入口是模型分配的
+    /// `domain_host`，目标是「把收到的请求原样回显」的本机端口——客户端读回的就是远端收到的字节。
+    #[tokio::test]
+    async fn domain_forward_rewrites_host_only_when_switch_is_on() {
+        use tl_protocol::{CreateTunnelRequest, TunnelState, LOCAL_SERVER_ID};
+
+        async fn run(rewrite: bool) -> String {
+            let dir = std::env::temp_dir().join(format!(
+                "threadline-domain-rewrite-{}-{rewrite}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("create dir");
+
+            let credentials = Arc::new(CredentialStore::new(dir.join("credentials.dat")));
+            let servers = Arc::new(ServerStore::new(
+                dir.join("servers.json"),
+                Arc::clone(&credentials),
+            ));
+            let tunnels = Arc::new(TunnelStore::new(
+                dir.join("tunnels.json"),
+                Arc::clone(&servers),
+            ));
+            let runner = Arc::new(TunnelRunner::new(
+                Arc::clone(&tunnels),
+                Arc::clone(&servers),
+                credentials,
+                None,
+            ));
+
+            // 目标：收到的字节原样回显
+            let target = TcpListener::bind("127.0.0.1:0").await.expect("target");
+            let target_port = target.local_addr().expect("addr").port();
+            tokio::spawn(async move {
+                while let Ok((mut socket, _)) = target.accept().await {
+                    tokio::spawn(async move {
+                        let mut buf = vec![0u8; 1024];
+                        while let Ok(n) = tokio::io::AsyncReadExt::read(&mut socket, &mut buf).await
+                        {
+                            if n == 0 {
+                                break;
+                            }
+                            if tokio::io::AsyncWriteExt::write_all(&mut socket, &buf[..n])
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                    });
+                }
+            });
+
+            // 入口端口在域名回环地址上探一个空闲号（127.0.0.2 起，避开系统与普通转发）
+            let entry_port = {
+                let probe = TcpListener::bind("127.0.0.2:0").await.expect("probe");
+                probe.local_addr().expect("addr").port()
+            };
+
+            let created = tunnels
+                .create(CreateTunnelRequest {
+                    name: format!("domain-http-{rewrite}"),
+                    server_id: LOCAL_SERVER_ID.into(),
+                    local_host: "127.0.0.1".into(),
+                    local_port: entry_port,
+                    remote_host: "127.0.0.1".into(),
+                    remote_port: target_port,
+                    auto_start: false,
+                    note: String::new(),
+                    open_path: String::new(),
+                    scheme: "http".into(),
+                    domain: "home.example.test".into(),
+                    remote_scheme: None,
+                    rewrite_http_headers: rewrite,
+                    header_rewrite: Default::default(),
+                    icon: String::new(),
+                    group: String::new(),
+                    in_app: true,
+                })
+                .expect("create domain forward");
+
+            runner.start(&created.id).await.expect("start");
+
+            let mut state = TunnelState::Stopped;
+            for _ in 0..50 {
+                state = tunnels.view(&created.id).expect("view").status.state;
+                if state == TunnelState::Running {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert_eq!(state, TunnelState::Running, "域名入口应当已监听");
+
+            let def = tunnels.view(&created.id).expect("view").definition;
+            let entry = (def.domain_host.clone(), def.local_port);
+            assert!(
+                entry.0.starts_with("127.0.0."),
+                "域名入口应落在回环池：{:?}",
+                entry
+            );
+
+            let mut client = tokio::net::TcpStream::connect(entry)
+                .await
+                .expect("connect domain entry");
+            tokio::io::AsyncWriteExt::write_all(
+                &mut client,
+                b"GET / HTTP/1.1\r\nHost: home.example.test\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .expect("write");
+
+            // 回显的是请求头本身（以 `\r\n\r\n` 结束），凑齐头就停；目标不会主动关连接。
+            let mut reply = Vec::new();
+            let mut buf = [0u8; 1024];
+            for _ in 0..50 {
+                match tokio::time::timeout(
+                    Duration::from_millis(200),
+                    tokio::io::AsyncReadExt::read(&mut client, &mut buf),
+                )
+                .await
+                {
+                    Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                    Ok(Ok(n)) => {
+                        reply.extend_from_slice(&buf[..n]);
+                        if reply.windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            runner.stop(&created.id).await.expect("stop");
+            let _ = std::fs::remove_dir_all(&dir);
+            String::from_utf8_lossy(&reply).to_string()
+        }
+
+        let plain = run(false).await;
+        assert!(
+            plain.contains("\r\nHost: home.example.test\r\n"),
+            "开关关闭时远端必须收到原样 Host：{plain}"
+        );
+        assert!(
+            !plain.contains("X-Forwarded-Proto"),
+            "开关关闭时不该补 X-Forwarded-*：{plain}"
+        );
+
+        let rewritten = run(true).await;
+        assert!(
+            !rewritten.contains("\r\nHost: home.example.test\r\n"),
+            "开关打开时域名不该留在 Host：{rewritten}"
+        );
+        assert!(
+            rewritten.contains("Host: 127.0.0.1:"),
+            "打开后 Host 应是远端地址：{rewritten}"
+        );
+        assert!(
+            rewritten.contains("X-Forwarded-Proto: http"),
+            "明文入口不能谎报 https：{rewritten}"
+        );
+        assert!(
+            rewritten.contains("X-Forwarded-Host: home.example.test"),
+            "原域名要留给远端：{rewritten}"
+        );
     }
 
     #[test]

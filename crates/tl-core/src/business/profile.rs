@@ -439,6 +439,8 @@ fn create_forward(
         scheme: forward.scheme.clone(),
         domain: forward.domain.clone(),
         remote_scheme: forward.remote_scheme.clone(),
+        rewrite_http_headers: forward.rewrite_http_headers,
+        header_rewrite: Some(forward.header_rewrite.clone()),
         icon: bounded_icon(&forward.icon),
         group: forward.group.clone(),
         in_app: forward.in_app,
@@ -470,6 +472,8 @@ fn overwrite_forward(
             scheme: Some(forward.scheme.clone()),
             domain: Some(forward.domain.clone()),
             remote_scheme: forward.remote_scheme.clone(),
+            rewrite_http_headers: Some(forward.rewrite_http_headers),
+            header_rewrite: Some(forward.header_rewrite.clone()),
             icon: Some(bounded_icon(&forward.icon)),
             group: Some(forward.group.clone()),
             in_app: Some(forward.in_app),
@@ -585,6 +589,8 @@ mod tests {
                 scheme: "tcp".into(),
                 domain: domain.to_string(),
                 remote_scheme: None,
+                rewrite_http_headers: false,
+                header_rewrite: Default::default(),
                 icon: String::new(),
                 group: String::new(),
                 in_app: true,
@@ -603,6 +609,8 @@ mod tests {
             scheme: "tcp".into(),
             domain: domain.to_string(),
             remote_scheme: None,
+            rewrite_http_headers: false,
+            header_rewrite: Default::default(),
             open_path: String::new(),
             note: String::new(),
             group: String::new(),
@@ -635,6 +643,8 @@ mod tests {
             scheme: "tcp".into(),
             domain: String::new(),
             remote_scheme: None,
+            rewrite_http_headers: false,
+            header_rewrite: Default::default(),
             app_order: None,
             open_path: String::new(),
             note: String::new(),
@@ -760,6 +770,44 @@ mod tests {
         assert_eq!(
             saved[0].host_key_fingerprint.as_deref(),
             Some("SHA256:shared")
+        );
+    }
+
+    #[test]
+    fn import_keeps_http_rewrite_switch() {
+        let f = fixture("import-rewrite");
+        let mut forward = import_forward("rw", 18083, "create");
+        forward.scheme = "https".into();
+        forward.remote_scheme = Some("http".into());
+        forward.domain = "home.example.com".into();
+        forward.rewrite_http_headers = true;
+
+        import(
+            &f.servers,
+            &f.tunnels,
+            ProfileImportRequest {
+                app_groups: Vec::new(),
+                servers: vec![ProfileImportServer {
+                    source_id: "pkg-rw".into(),
+                    name: "rw".into(),
+                    host: "192.0.2.10".into(),
+                    port: 22,
+                    username: "root".into(),
+                    credential_kind: CredentialKind::Password,
+                    keepalive_secs: 30,
+                    host_key_fingerprint: None,
+                    action: "create".into(),
+                    forwards: vec![forward],
+                }],
+                keep_disabled: true,
+            },
+        )
+        .expect("import");
+
+        let items = f.tunnels.list().expect("list").items;
+        assert!(
+            items[0].definition.rewrite_http_headers,
+            "包里的开关必须跟着落到配置里"
         );
     }
 

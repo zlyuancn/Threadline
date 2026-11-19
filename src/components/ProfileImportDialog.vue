@@ -196,6 +196,8 @@ function buildRequest(): ProfileImportRequest {
           scheme: forward.scheme,
           domain: forward.domain,
           remote_scheme: (forward.remote_scheme as 'http' | 'https' | null) ?? null,
+          rewrite_http_headers: forward.rewrite_http_headers ?? false,
+          header_rewrite: forward.header_rewrite,
           open_path: forward.open_path,
           note: forward.note,
           group: forward.group,

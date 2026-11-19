@@ -241,6 +241,28 @@ export interface GatewayTrustResult {
   at: string;
 }
 
+/** 自定义头的一行（`name: value`），同名覆盖、否则追加。 */
+export interface HeaderPair {
+  name: string;
+  value: string;
+}
+
+/**
+ * 一条转发的 HTTP 头改写细则。`rewrite_http_headers` 关闭时整份不用。
+ *
+ * 默认值 = 旧行为：`Host` 换成远端地址、补 `X-Forwarded-*`、回写 `Location`、无自定义头。
+ */
+export interface HeaderRewrite {
+  /** `null` / 缺省 = 自动用远端地址；`''` = 保留浏览器原值；其它 = 自定义 */
+  host?: string | null;
+  /** 是否补 `X-Forwarded-Proto` / `X-Forwarded-Host` */
+  forward_headers?: boolean;
+  /** 响应里指向远端的 `Location` 是否换回浏览器访问的地址 */
+  rewrite_location?: boolean;
+  /** 额外追加/覆盖的请求头 */
+  extra?: HeaderPair[];
+}
+
 export interface TunnelDto {
   id: string;
   name: string;
@@ -262,6 +284,15 @@ export interface TunnelDto {
   domain_host?: string;
   /** 远端实际协议；缺省由 scheme 推导。 */
   remote_scheme?: RemoteScheme | null;
+  /**
+   * 是否改写 HTTP 头（`Host` 换远端地址、补 `X-Forwarded-*`、回写 `Location`）。
+   *
+   * 默认 `false` = 完全透明转发。只有能看到明文的入口（http→http 明文直通、
+   * https→http 本地解密）才生效；https 透传与 tcp 类无效。
+   */
+  rewrite_http_headers?: boolean;
+  /** 头改写细则；缺省 = 全默认（等价于旧行为）。 */
+  header_rewrite?: HeaderRewrite;
   /** 自定义图标（http(s) / data:image）；空 = 按入口自动取 favicon。 */
   icon?: string;
   /** 自定义分组；空 = 未分组。 */
@@ -323,6 +354,10 @@ export interface CreateTunnelRequest {
   domain?: string;
   /** 远端协议；不传 = 由 scheme 推导。 */
   remote_scheme?: RemoteScheme;
+  /** 是否改写 HTTP 头；不传 = 不改写。 */
+  rewrite_http_headers?: boolean;
+  /** 改写细则；不传 = 全默认。 */
+  header_rewrite?: HeaderRewrite;
   /** 自定义图标；不传 = 自动取 favicon。 */
   icon?: string;
   /** 自定义分组；不传 = 未分组。 */
@@ -346,6 +381,10 @@ export interface PatchTunnelRequest {
   domain?: string;
   /** 远端协议；空串或 `auto` 表示回到由 scheme 推导。 */
   remote_scheme?: RemoteScheme | 'auto' | '';
+  /** 是否改写 HTTP 头；不传 = 不改这一项。 */
+  rewrite_http_headers?: boolean;
+  /** 改写细则；不传 = 不改这一项。 */
+  header_rewrite?: HeaderRewrite;
   /** 自定义图标；空串表示清空（回到自动取 favicon）。 */
   icon?: string;
   /** 自定义分组；空串表示清空（回到未分组）。 */
@@ -419,6 +458,10 @@ export interface ProfileImportForward {
   scheme?: string;
   domain?: string;
   remote_scheme?: RemoteScheme | null;
+  /** 是否改写 HTTP 头；缺省 = 不改写。 */
+  rewrite_http_headers?: boolean;
+  /** 头改写细则；缺省 = 全默认。 */
+  header_rewrite?: HeaderRewrite;
   open_path?: string;
   note?: string;
   group?: string;

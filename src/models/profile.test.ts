@@ -170,6 +170,21 @@ describe('buildProfile', () => {
     expect(built.document.servers[0].forwards[0].icon).toBe('https://example.com/logo.png');
     expect(built.icons.size).toBe(0);
   });
+
+  it('carries the http-rewrite switch through the package', async () => {
+    const built = buildProfile({
+      servers: [{ ...servers[0] }],
+      forwards: [{ ...forwards[0], rewrite_http_headers: true }],
+      serverIds: ['srv_a'],
+      forwardIds: [],
+      includeIcons: true,
+      includeFingerprint: true,
+    });
+    expect(built.document.servers[0].forwards[0].rewrite_http_headers).toBe(true);
+
+    const parsed = await readPackage(writePackage(built));
+    expect(parsed.document.servers[0].forwards[0].rewrite_http_headers).toBe(true);
+  });
 });
 
 describe('readPackage', () => {
