@@ -30,7 +30,9 @@ C 档（DNS 劫持）留后续。技术栈：Kotlin + Compose + Rust 共享核�
   + Kotlin 绑定（`android/app/src/main/java/uniffi/tl_mobile/tl_mobile.kt`，生成物入库）+ spike APK 构建通过；
   **剩真机**：装 `app-debug.apk` → 首次拿到指纹并核对 → `running` → 手机浏览器开 `127.0.0.1:8123` → 拔网 30s 回 `running`。
   宿主机 `cargo test -p tl-mobile` 已绿（状态词与桌面一致）。
-  - 阻塞：**当前本机无设备连接**（`adb devices` 为空），需要插手机开 USB 调试，并需要一台真实 SSH 服务器（家里 sshd）。
+  - 阻塞（**挂起中**）：`adb devices` 为空；2026-11-19 用户确认**暂时无法提供手机**，A0.2 真机三项与 A0.3 一并挂起，
+    恢复条件 = 用户给出可调试设备（开 USB 调试）+ 一台真实 SSH 服务器（家里 sshd 的公网端口）。
+    期间可做的不依赖手机的事：Keystore 桥（A1.3）、`atomic.rs` unix 分支、Compose 骨架、msocheck R7（A5.1）。
 - [ ] **A0.3 WebView 打回环别名**：未开始（依赖 A0.2 真机通过）。
 - [ ] A1 骨架：`tl-core` 安卓分流已提前落地一部分（`interface` 在 `cfg(not(android))` 之外的模块已能交叉编译、
   `secret` 给了明确报错的安卓分支）；剩下 Keystore 桥、`atomic.rs` 的 rename 分支、Compose 工程与前台服务。
