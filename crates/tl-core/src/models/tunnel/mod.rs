@@ -38,7 +38,8 @@ use crate::models::RemoveDecision;
 pub use fsm::{accepts_connections, holds_listener, TunnelEvent};
 pub use traffic::Traffic;
 
-mod traffic;
+// 门面（`crates/tl-mobile`）要自己持有计数器才能把流量抛给 UI：`serve_listener` 的参数是它。
+pub mod traffic;
 
 use tl_protocol::SCHEMA_VERSION;
 

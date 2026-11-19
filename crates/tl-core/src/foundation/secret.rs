@@ -10,6 +10,7 @@
 //! 因此调用方必须把凭据文件的 ACL 收紧到「SYSTEM + Administrators + 交互用户」。
 
 /// `CryptProtectData` 的 `CRYPTPROTECT_LOCAL_MACHINE` 标志。
+#[cfg(windows)]
 const CRYPTPROTECT_LOCAL_MACHINE: u32 = 0x4;
 
 #[cfg(windows)]
@@ -93,11 +94,29 @@ mod imp {
     }
 }
 
+/// 安卓端：主密钥在 Keystore，加解密那一刻回调 Kotlin（由门面注入，见 A1.3）。
+/// 在桥接完成前**有意不给明文兜底**——加解密报错，比悄悄把明文写到磁盘安全。
+#[cfg(target_os = "android")]
+mod imp {
+    use anyhow::{anyhow, Result};
+
+    pub fn seal(_plaintext: &[u8]) -> Result<Vec<u8>> {
+        Err(anyhow!("安卓端凭据加密尚未接入（A1.3 Keystore 桥）"))
+    }
+
+    pub fn open(_sealed: &[u8]) -> Result<Vec<u8>> {
+        Err(anyhow!("安卓端凭据解密尚未接入（A1.3 Keystore 桥）"))
+    }
+}
+
 #[cfg(windows)]
 pub use imp::{open, seal};
 
-#[cfg(not(windows))]
-compile_error!("Threadline 只支持 Windows（DPAPI 绑定依赖 Win32）");
+#[cfg(target_os = "android")]
+pub use imp::{open, seal};
+
+#[cfg(not(any(windows, target_os = "android")))]
+compile_error!("Threadline 只支持 Windows 与 Android（凭据加密依赖 DPAPI 或 Keystore）");
 
 #[cfg(all(test, windows))]
 mod tests {
