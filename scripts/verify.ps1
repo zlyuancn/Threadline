@@ -59,9 +59,22 @@ try {
     } else {
         # tauri-build refuses to compile when externalBin is missing, and src-tauri\binaries
         # is gitignored -- stage it first, otherwise a clean clone cannot run the agent tests.
+        #
+        # "exists" is not enough: tauri-build copies this sidecar next to tl-agent.exe, so a stale
+        # one means the app you launch afterwards runs an OLD core (missing routes → HTTP 404)
+        # even though the source is new. Restage whenever the core sources are newer than it.
         Step 'stage sidecar' {
-            $sidecar = Get-ChildItem (Join-Path $root 'src-tauri\binaries') -Filter 'tl-core-*.exe' -ErrorAction SilentlyContinue
-            if (-not $sidecar) {
+            $binaryDir = Join-Path $root 'src-tauri\binaries'
+            $sidecar = Get-ChildItem $binaryDir -Filter 'tl-core-*.exe' -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            $coreSources = @(
+                Get-ChildItem (Join-Path $root 'crates\tl-core\src') -Recurse -File -Filter '*.rs'
+                Get-ChildItem (Join-Path $root 'crates\tl-protocol\src') -Recurse -File -Filter '*.rs'
+                Get-Item (Join-Path $root 'Cargo.toml'), (Join-Path $root 'Cargo.lock') -ErrorAction SilentlyContinue
+            )
+            $newest = ($coreSources | Measure-Object -Property LastWriteTime -Maximum).Maximum
+            $stale = -not $sidecar -or ($newest -and $newest -gt $sidecar.LastWriteTime)
+            if ($stale) {
                 & $cargo build --release -p tl-core
                 if ($LASTEXITCODE -ne 0) { throw 'release core build failed' }
                 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\bundle-sidecars.ps1')
