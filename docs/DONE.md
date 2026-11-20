@@ -2,6 +2,19 @@
 
 > 只增不改。收口时从 `TODO.md` 整条搬入，带完成日期、门禁结果与详情指针。
 
+## 2026-11-20 发布 v0.4.2
+
+- **版本**：`0.4.2`，提交 `5ae49f2`，tag `v0.4.2` 已推送；`main` 从 `b39b0d8` 前进到 `5ae49f2`。
+- **内容**（自 `v0.4.1` 起 3 个提交）：新增「每条转发的 HTTP 头改写（默认关）」`c26ab88`、服务器管理
+  「虚拟机」`7b6f246`；另修掉门禁脚本的 sidecar 过期问题 `b39b0d8`（仅开发侧）。用户可见的**没有修复项**，
+  两条都是新功能。
+- **门禁**：`scripts/verify.ps1` → Local gate GREEN（workspace 279 / 11 / 1 / 24 / 18 + agent 9、
+  `clippy -D warnings` ×2、`fmt --check` ×2、`vue-tsc`、`vitest` 186、`vite build`、`msocheck`）。
+- **发布**：Release 由 tag 触发，正文由 `scripts/release-notes.ps1` 从 CHANGELOG 生成；
+  产物 `Threadline_0.4.2_x64-setup.exe` / `Threadline_v0.4.2_x64-portable.zip` / `SHA256SUMS.txt` 已附上，
+  `Release` 流水线结论 success（约 24 分钟）。
+- **遗留**：真机只覆盖 deva（libvirt 11.2.0）；「不在 libvirt 组」的横幅与 guest 侧内存口径仍记在 `TODO.md`。
+
 ## 2026-11-20 服务器管理：虚拟机（P4）
 
 - **结果**：管理页「虚拟机」由占位转正 —— `virsh` 列表（主要 / 详细两档密度）、详情 / 磁盘 / 网络 / 串口控制台
