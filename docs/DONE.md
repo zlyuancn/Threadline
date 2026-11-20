@@ -2,6 +2,25 @@
 
 > 只增不改。收口时从 `TODO.md` 整条搬入，带完成日期、门禁结果与详情指针。
 
+## 2026-11-20 服务器管理：虚拟机（P4）
+
+- **结果**：管理页「虚拟机」由占位转正 —— `virsh` 列表（主要 / 详细两档密度）、详情 / 磁盘 / 网络 / 串口控制台
+  四页签、行内「⋯」动作（开机 / 优雅关机 / 重启 / 暂停 / 继续 / 强制断电 / 开机自启）与两套确认
+  （强制断电要勾「我知道」）。资源环用 `RingGauge`：CPU 环是负载百分比，内存环是实占值。
+- **门禁**：`cargo test --workspace` 279 / 11 / 1 / 24 / 18、`clippy -D warnings`（workspace + agent）、
+  `fmt --check`（两套）、`vue-tsc`、`vitest` 20 文件 / 186 条、`vite build`、`msocheck` 全绿
+  （`scripts/verify.ps1` → Local gate GREEN）。
+- **真机冒烟**：`deva`（libvirt 11.2.0，3 台域）跑通列表 / 详情 / 磁盘 / 网络 / 串口控制台
+  （`virsh console proxy` 实连）。过程中修掉三处只有真机才暴露的问题：
+  ① `domstats` 不认 `--inactive`（带上报错被 `2>/dev/null` 吞掉，CPU / 磁盘 / 网速一起归零）；
+  ② 缺 `--cpu-total`（默认不输出 `cpu.time`，CPU 环永远 `—`）；
+  ③ 磁盘只靠 `domstats`（只覆盖运行中的域）→ 改为 `domblklist --details` + `domblkinfo`。
+- **详情**：设计 `plans/2026-11-20-vm-admin-design.md`、实施记录 `plans/2026-11-20-vm-admin-plan.md`；
+  模型 `crates/tl-core/src/models/server_admin/vms.rs`、前端 `src/views/admin/VmsPanel.vue`、
+  `src/views/admin/VmConsole.vue`、`src/models/vms.ts`。
+- **完成时的遗留**：①「不在 libvirt 组」的横幅文案没有受限账号实测；② guest 侧真实内存用量拿不到
+  （这台机器 `dommemstat` 只回 `actual` / `rss`），界面展示宿主 RSS 并按分配量封顶；两项均记在 `TODO.md`。
+
 ## 2026-11-19
 
 ### 发布 v0.4.1

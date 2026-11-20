@@ -18,6 +18,15 @@ const props = withDefaults(
     /** 圆心数字下面的一行小字，例如「已用」。 */
     label?: string;
     /**
+     * 圆心主数字的替代文案。
+     *
+     * 默认是「N%」——概览三块都是百分比。虚拟机内存环要显示实占值（`15.2`），
+     * 百分比交给弧本身，这时传 `text`。
+     */
+    text?: string;
+    /** 圆心第二行（单位）。与 `label` 二选一；小环里也显示。 */
+    sub?: string;
+    /**
      * 分段模式：把一圈按比例切成几段（例如内存的已用 / 缓存 / Buffers）。
      *
      * 不传就是单段（按阈值变色）。传了之后颜色由各段自己决定——
@@ -25,7 +34,7 @@ const props = withDefaults(
      */
     segments?: { value: number; color: string }[];
   }>(),
-  { size: 96, label: '', segments: undefined },
+  { size: 96, label: '', text: undefined, sub: '', segments: undefined },
 );
 
 const RADIUS = 42;
@@ -38,8 +47,14 @@ const level = computed(() =>
   clamped.value >= 90 ? 'is-bad' : clamped.value >= 70 ? 'is-warn' : 'is-ok',
 );
 const dashOffset = computed(() => CIRCUMFERENCE * (1 - clamped.value / 100));
-/** 小环里塞不下 18px 的字。 */
-const valueStyle = computed(() => ({ fontSize: props.size <= 56 ? '11px' : '18px' }));
+/** 小环里塞不下 18px 的字；两行时（主数字 + 单位）再让一档。 */
+const valueStyle = computed(() => {
+  const small = props.size <= 56;
+  if (props.sub) return { fontSize: small ? '9.5px' : '13px' };
+  return { fontSize: small ? '11px' : '18px' };
+});
+
+const subStyle = computed(() => ({ fontSize: props.size <= 56 ? '7.5px' : '10px' }));
 
 /** 每段的弧长与起始偏移：一路累加，段与段首尾相接。 */
 const arcs = computed(() => {
@@ -89,8 +104,9 @@ const arcs = computed(() => {
       />
     </svg>
     <div class="ring-text">
-      <span class="ring-value" :style="valueStyle">{{ Math.round(clamped) }}%</span>
-      <span v-if="label && size > 56" class="ring-label">{{ label }}</span>
+      <span class="ring-value" :style="valueStyle">{{ text ?? `${Math.round(clamped)}%` }}</span>
+      <span v-if="sub" class="ring-sub" :style="subStyle">{{ sub }}</span>
+      <span v-else-if="label && size > 56" class="ring-label">{{ label }}</span>
     </div>
   </div>
 </template>
@@ -161,5 +177,10 @@ const arcs = computed(() => {
 .ring-label {
   font-size: 10px;
   color: var(--text-3);
+}
+
+.ring-sub {
+  line-height: 1;
+  color: var(--text-2);
 }
 </style>

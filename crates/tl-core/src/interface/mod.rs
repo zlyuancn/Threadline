@@ -27,7 +27,8 @@ use tl_protocol::{
     PatchTunnelRequest, ProbeDraftRequest, ProbeServerReport, ProxySyncResult,
     RenameAppGroupRequest, ReorderAppRequest, ServerDto, ServerEnabledResult, ServerList,
     ServerOverview, SessionClosed, SessionState, SetAppGroupsRequest, SetAutostartRequest,
-    SetServerEnabledRequest, ShutdownAccepted, TunnelList, TunnelView, WhoamiResponse, API_PREFIX,
+    SetServerEnabledRequest, ShutdownAccepted, TunnelList, TunnelView, VmAction, VmActionResult,
+    VmDetail, VmList, WhoamiResponse, API_PREFIX,
 };
 
 use crate::business::admin::ConsoleGuard;
@@ -174,6 +175,27 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             &format!("{API_PREFIX}/servers/{{id}}/admin/containers/{{cid}}/console"),
             get(server_container_console),
+        )
+        // 虚拟机管理：列表 / 详情 / 动作 / 自启 / 串口控制台。
+        .route(
+            &format!("{API_PREFIX}/servers/{{id}}/admin/vms"),
+            get(server_vms),
+        )
+        .route(
+            &format!("{API_PREFIX}/servers/{{id}}/admin/vms/{{name}}"),
+            get(server_vm_detail),
+        )
+        .route(
+            &format!("{API_PREFIX}/servers/{{id}}/admin/vms/{{name}}/action"),
+            post(server_vm_action),
+        )
+        .route(
+            &format!("{API_PREFIX}/servers/{{id}}/admin/vms/{{name}}/autostart"),
+            post(server_vm_autostart),
+        )
+        .route(
+            &format!("{API_PREFIX}/servers/{{id}}/admin/vms/{{name}}/console"),
+            get(server_vm_console),
         )
         // 服务器终端：同样是 WS（登录 shell），与容器控制台共用一条桥。
         .route(
@@ -560,6 +582,88 @@ async fn server_container_remove(
         )
         .await?;
     Ok(Json(result))
+}
+
+// ── 虚拟机管理 ────────────────────────────────────────────
+
+async fn server_vms(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<VmList>, ApiFailure> {
+    Ok(Json(state.services.vms(&id).await?))
+}
+
+async fn server_vm_detail(
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, name)): AxumPath<(String, String)>,
+) -> Result<Json<VmDetail>, ApiFailure> {
+    Ok(Json(state.services.vm_detail(&id, &name).await?))
+}
+
+#[derive(Debug, Deserialize)]
+struct VmActionRequest {
+    action: String,
+}
+
+/// 动作字符串 → 枚举。**不把前端传的字符串拼进命令**。
+fn parse_vm_action(raw: &str) -> Result<VmAction, ApiFailure> {
+    match raw {
+        "start" => Ok(VmAction::Start),
+        "shutdown" => Ok(VmAction::Shutdown),
+        "reboot" => Ok(VmAction::Reboot),
+        "suspend" => Ok(VmAction::Suspend),
+        "resume" => Ok(VmAction::Resume),
+        "destroy" => Ok(VmAction::Destroy),
+        other => Err(ApiFailure::bad_request(
+            "invalid_action",
+            format!("不支持的操作：{other}"),
+        )),
+    }
+}
+
+async fn server_vm_action(
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, name)): AxumPath<(String, String)>,
+    Json(req): Json<VmActionRequest>,
+) -> Result<Json<VmActionResult>, ApiFailure> {
+    let action = parse_vm_action(&req.action)?;
+    Ok(Json(state.services.vm_action(&id, &name, action).await?))
+}
+
+#[derive(Debug, Deserialize)]
+struct VmAutostartRequest {
+    enabled: bool,
+}
+
+async fn server_vm_autostart(
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, name)): AxumPath<(String, String)>,
+    Json(req): Json<VmAutostartRequest>,
+) -> Result<Json<VmActionResult>, ApiFailure> {
+    Ok(Json(
+        state.services.vm_autostart(&id, &name, req.enabled).await?,
+    ))
+}
+
+/// 串口控制台：`virsh console`，只能有一种模式，所以不接 `mode`。
+async fn server_vm_console(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, name)): AxumPath<(String, String)>,
+    Query(query): Query<ConsoleQuery>,
+) -> Response {
+    let cols = clamp_cols(query.cols.unwrap_or(100));
+    let rows = clamp_rows(query.rows.unwrap_or(30));
+
+    ws.on_upgrade(move |socket| async move {
+        let opened = state
+            .services
+            .vm_console(&id, &name, cols, rows)
+            .await
+            .map(|(pty, command, guard)| (pty, command, Some(guard)))
+            .map_err(|error| format!("{error:#}"));
+        pty_bridge(socket, opened, "serial").await;
+    })
 }
 
 // ── 控制台（WebSocket + PTY） ──────────────────────────────

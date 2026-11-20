@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use tl_protocol::{
     BlockDisk, ContainerRow, ContainerSummary, CpuStat, DiskIo, DiskUsage, GpuStat, LoadStat,
-    MemBreakdown, MemoryStat, NetInterface, ProcessRow, SystemInfo, ZfsPool,
+    MemBreakdown, MemoryStat, NetInterface, ProcessRow, SystemInfo, VmSummary, ZfsPool,
 };
 
 /// 解析后的概览（不含 `collected_at` / `elapsed_ms` / `modules`——那些由编排层补）。
@@ -31,6 +31,7 @@ pub struct ParsedOverview {
     pub disk_io: Vec<DiskIo>,
     pub processes: Vec<ProcessRow>,
     pub containers: ContainerSummary,
+    pub vms: VmSummary,
     pub degraded: Vec<String>,
 }
 
@@ -550,6 +551,18 @@ fn parse_ps(lines: &[&str]) -> Vec<ProcessRow> {
     out
 }
 
+fn parse_vm_summary(lines: &[&str]) -> VmSummary {
+    if lines.iter().any(|l| l.trim() == "__no_virsh__") {
+        return VmSummary::default();
+    }
+    let version = lines
+        .iter()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty())
+        .map(str::to_string);
+    VmSummary { version }
+}
+
 fn parse_containers(lines: &[&str]) -> Option<ContainerSummary> {
     if lines.iter().any(|l| l.trim() == "__no_engine__") {
         return None;
@@ -747,6 +760,11 @@ pub fn interpret_with(raw: &str, extras: Extras) -> ParsedOverview {
             }
         }
     }
+
+    // ── 虚拟机引擎探测 ─────────────────────────────────────────
+    // 缺这一段（老的轻量采集、非 Linux）不算降级：模块状态由"有没有 virsh"决定，
+    // 而 `@@virsh` 只出现在完整采集里，缺了就是"不知道"，别误报成不可用。
+    out.vms = parse_vm_summary(lines_of("virsh"));
 
     // ── 缺块汇总 ───────────────────────────────────────────────
     if sections.is_empty() {

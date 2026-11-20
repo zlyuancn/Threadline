@@ -152,6 +152,12 @@ const DOCKER_SECTION: &str = r#"echo @@docker
 if command -v docker >/dev/null 2>&1; then docker ps -a --format "{{.ID}}|{{.Names}}|{{.Image}}|{{.State}}|{{.Status}}" 2>/dev/null; else echo __no_engine__; fi
 "#;
 
+/// 虚拟机模块的"有没有"探测。只问 `virsh --version`（读本地文件，不需要连接 libvirt），
+/// 所以"装了但当前用户不在 libvirt 组"在概览这层看不出来——那是列表请求的错误。
+const VIRSH_SECTION: &str = r#"echo @@virsh
+if command -v virsh >/dev/null 2>&1; then virsh --version 2>/dev/null; else echo __no_virsh__; fi
+"#;
+
 const END: &str = "echo @@end\n'";
 
 /// 按 probe 拼出采集脚本。
@@ -181,6 +187,7 @@ pub fn script(probe: Probe) -> String {
             out.push_str(DISKSTATS2);
             out.push_str(NETDEV2);
             out.push_str(DOCKER_SECTION);
+            out.push_str(VIRSH_SECTION);
         }
         Probe::Live => {
             out.push_str(META);

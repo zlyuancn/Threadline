@@ -9,6 +9,7 @@ import { onWindowFocusChange } from '../api/native';
 import RingGauge from '../components/RingGauge.vue';
 import Sparkline from '../components/Sparkline.vue';
 import ContainersPanel from './admin/ContainersPanel.vue';
+import VmsPanel from './admin/VmsPanel.vue';
 
 // xterm 约 74 kB（gzip）：只有真的进「终端」才该下载它
 const TerminalPanel = defineAsyncComponent(() => import('./admin/TerminalPanel.vue'));
@@ -52,7 +53,7 @@ watch(active, (id) => {
 
 /** 有独立组件的模块都在这里；其余走「规划中」占位。 */
 const isPlaceholder = computed(
-  () => !['overview', 'containers', 'terminal'].includes(active.value),
+  () => !['overview', 'containers', 'vms', 'terminal'].includes(active.value),
 );
 
 /** 概览既没数据也不在加载/报错：给一句提示，而不是空白页。 */
@@ -835,6 +836,9 @@ const systemRows = computed(() => {
 
         <!-- ── 容器管理 ─────────────────────────────────── -->
         <ContainersPanel v-if="active === 'containers'" :server-id="serverId" />
+
+        <!-- ── 虚拟机 ───────────────────────────────────── -->
+        <VmsPanel v-if="active === 'vms'" :server-id="serverId" />
 
         <!-- ── 终端 ─────────────────────────────────────── -->
         <!--

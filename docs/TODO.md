@@ -73,8 +73,21 @@ C 档（DNS 劫持）留后续。技术栈：Kotlin + Compose + Rust 共享核�
   - [ ] 调试图依赖本机有 `busybox`：国内直连 docker.io 会超时，需要镜像加速或手动
         `docker pull …/busybox && docker tag … busybox:latest`；要不要在界面里给出这句提示待定
   - [ ] `scripts/verify.sh` 的 agent 侧需先关掉运行中的 Threadline
-- [ ] **虚拟机管理**（规划，P4）。侧边栏位置在「容器管理」下面，只做 `virsh` 列表 / 生命周期 / 串口控制台；
-  创建 / 删除虚拟机、磁盘扩容、快照、迁移不做。细节见容器管理设计文档末节，届时单独出设计。
+- [x] **虚拟机管理**（P4，2026-11-20 收口，条目见 `DONE.md`）。设计 `docs/plans/2026-11-20-vm-admin-design.md`，
+  实施记录 `docs/plans/2026-11-20-vm-admin-plan.md`，原型 `tmp/misc/vm-admin-prototype.html`。
+  只做 `virsh` 列表 / 生命周期 / 串口控制台；创建 / 删除、磁盘扩容、快照、迁移、VNC 不做。
+  - [x] 模型层：列表 / 详情 / 动作 / 自启四段脚本、`domstats` 分段解析、动作白名单与域名白名单 + 单测
+  - [x] 概览探测：`@@virsh` → 模块 `Ready` / `Unavailable`，侧栏紧跟容器管理（名字仍是「虚拟机」）
+  - [x] 业务与接口：列表 / 详情 / 动作 / 自启 / 串口控制台 WS（占用键 `server:vm:<name>`）
+  - [x] 前端：`models/vms.ts`（两拍差分算 CPU% 与网速）、`VmsPanel.vue`（两档密度、四页签、
+        「⋯」菜单、两套确认）、`VmConsole.vue`；`RingGauge` 加 `text` / `sub`
+  - [x] 真机冒烟（`deva`，libvirt 11.2.0 / 3 台）：列表、两档密度、抽屉四页签、行内菜单、
+        优雅关机确认、串口控制台（`virsh console proxy` 真连上）。期间修掉：`domstats` 不支持
+        `--inactive`（导致 CPU/磁盘/网速归零）、缺 `--cpu-total`（CPU 永远 `—`）、磁盘只靠
+        `domstats`（关机的域没有）→ 改为 `domblklist` + `domblkinfo`
+  - [ ] 「不在 libvirt 组」的横幅只在代码里，没有受限账号实测
+  - [ ] guest 侧真实内存用量：这台机器 `dommemstat` 只回 `actual` / `rss`（无 `unused`），
+        当前展示的是宿主 RSS（含 qemu 开销，按分配量封顶并标注）
 
 ### 本机访问（代码已完成，剩真机验证）
 

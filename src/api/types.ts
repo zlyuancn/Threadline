@@ -781,6 +781,95 @@ export interface ContainerActionResult {
   image_removed: boolean;
 }
 
+// ── 虚拟机（libvirt，管理页模块）────────────────────────────────
+
+/** 概览里的探测结果：只回答"这台机器有没有 virsh"。 */
+export interface VmSummary {
+  version?: string;
+}
+
+export interface VmDisk {
+  /** 客户机设备名，如 `vda`。 */
+  target: string;
+  /** `disk` / `cdrom`；列表档为空，详情档补。 */
+  device: string;
+  source: string;
+  capacity_bytes: number;
+  allocation_bytes: number;
+  /** `qcow2` / `raw`；详情档才有。 */
+  format: string;
+}
+
+export interface VmNet {
+  target: string;
+  /** `network` / `bridge` / `user`。 */
+  kind: string;
+  /** 网络名或桥名。 */
+  source: string;
+  model: string;
+  mac: string;
+  /** 无 DHCP 租约时为空串——界面写「无租约」而不是留白。 */
+  ip: string;
+  rx_bytes: number;
+  tx_bytes: number;
+}
+
+export interface VmItem {
+  name: string;
+  /** 关机域没有 Id。 */
+  id?: number;
+  uuid: string;
+  /** libvirt 原样状态：`running` / `paused` / `shut off` / `crashed` / `pmsuspended`。 */
+  state: string;
+  vcpu: number;
+  /** 分配内存（KiB）。 */
+  memory_kib: number;
+  /** 实占内存（KiB）；0 表示拿不到。 */
+  memory_used_kib: number;
+  /** 累计 CPU 时间（纳秒），速率由前端两次采样算。 */
+  cpu_time_ns: number;
+  autostart: boolean;
+  persistent: boolean;
+  os_type: string;
+  disks: VmDisk[];
+  nets: VmNet[];
+  net_rx_bytes: number;
+  net_tx_bytes: number;
+}
+
+export interface VmList {
+  engine?: string;
+  total: number;
+  running: number;
+  paused: number;
+  shutoff: number;
+  crashed: number;
+  items: VmItem[];
+  collected_at: string;
+  elapsed_ms: number;
+  degraded: string[];
+}
+
+export interface VmDetail {
+  item: VmItem;
+  /** `dumpxml` 的机型；取不到为空。 */
+  machine: string;
+  /** `UEFI` / `BIOS`。 */
+  firmware: string;
+  /** `vnc://127.0.0.1:5901`；本期只展示不连接。 */
+  display?: string;
+}
+
+/** 与核心 `VmAction` 一一对应。 */
+export type VmAction = 'start' | 'shutdown' | 'reboot' | 'suspend' | 'resume' | 'destroy';
+
+export interface VmActionResult {
+  ok: boolean;
+  message: string;
+  /** 动作后回读的 `virsh domstate`。 */
+  state: string;
+}
+
 export interface ServerOverview {
   collected_at: string;
   elapsed_ms: number;
@@ -800,6 +889,8 @@ export interface ServerOverview {
   disk_io: DiskIo[];
   processes: ProcessRow[];
   containers: ContainerSummary;
+  /** libvirt 探测（只出现在完整采集里）。 */
+  vms?: VmSummary;
   modules: AdminModule[];
   degraded: string[];
 }

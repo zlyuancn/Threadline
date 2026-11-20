@@ -837,6 +837,9 @@ pub struct ServerOverview {
     #[serde(default)]
     pub processes: Vec<ProcessRow>,
     pub containers: ContainerSummary,
+    /// libvirt 探测结果（只回答有没有 `virsh`，不连虚拟机）。
+    #[serde(default)]
+    pub vms: VmSummary,
     /// 导航清单（含未实现模块）。
     #[serde(default)]
     pub modules: Vec<AdminModule>,
@@ -1257,6 +1260,166 @@ pub struct ContainerActionResult {
     /// 删容器时勾了「同时删镜像」才有值：镜像是否真的删掉。
     #[serde(default)]
     pub image_removed: bool,
+}
+
+// ─────────────────────── 虚拟机（libvirt） ───────────────────────
+
+/// 概览里对 libvirt 的探测结果：只回答"这台机器有没有 virsh"。
+///
+/// 探测不连 libvirt（`virsh --version` 只读本地文件），所以"装了但没权限"不在这里体现——
+/// 那是列表请求的错误，面板用横幅说，不把模块标成不可用。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VmSummary {
+    /// `virsh --version` 的输出；`None` = 没装。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct VmList {
+    /// `libvirt` 版本；`None` = 没有 libvirt。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    #[serde(default)]
+    pub total: usize,
+    #[serde(default)]
+    pub running: usize,
+    #[serde(default)]
+    pub paused: usize,
+    #[serde(default)]
+    pub shutoff: usize,
+    #[serde(default)]
+    pub crashed: usize,
+    #[serde(default)]
+    pub items: Vec<VmItem>,
+    #[serde(default)]
+    pub collected_at: String,
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    /// 采集失败的块，例如 `网卡`。
+    #[serde(default)]
+    pub degraded: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct VmItem {
+    /// libvirt 域名（唯一标识，不用 UUID：用户认得的是名字）。
+    pub name: String,
+    /// `virsh list` 的 Id；关机域没有 Id。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
+    #[serde(default)]
+    pub uuid: String,
+    /// 原样保留 libvirt 的状态词：`running` / `paused` / `shut off` / `crashed` / `pmsuspended`。
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub vcpu: u32,
+    /// 分配内存（KiB）。
+    #[serde(default)]
+    pub memory_kib: u64,
+    /// 实占内存（KiB）。`balloon.rss` 拿不到时为 0，界面显示 `—`。
+    #[serde(default)]
+    pub memory_used_kib: u64,
+    /// 累计 CPU 时间（纳秒）。**累计值不是百分比**：百分比由前端两次采样算。
+    #[serde(default)]
+    pub cpu_time_ns: u64,
+    #[serde(default)]
+    pub autostart: bool,
+    /// 持久化域（有 XML 定义）为真；临时域重启后会消失。
+    #[serde(default)]
+    pub persistent: bool,
+    #[serde(default)]
+    pub os_type: String,
+    #[serde(default)]
+    pub disks: Vec<VmDisk>,
+    #[serde(default)]
+    pub nets: Vec<VmNet>,
+    /// 累计收发字节（所有网卡合计）。速率同样由前端两次采样算。
+    #[serde(default)]
+    pub net_rx_bytes: u64,
+    #[serde(default)]
+    pub net_tx_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VmDisk {
+    /// 客户机里的设备名，如 `vda`。
+    pub target: String,
+    /// `disk` / `cdrom`；列表档拿不到，详情档补。
+    #[serde(default)]
+    pub device: String,
+    /// 宿主侧路径（块设备或镜像文件）。
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub capacity_bytes: u64,
+    /// qcow2 的实际占用；raw 与容量相同。
+    #[serde(default)]
+    pub allocation_bytes: u64,
+    /// `qcow2` / `raw`，详情档从 `dumpxml` 取。
+    #[serde(default)]
+    pub format: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VmNet {
+    /// 客户机里的网卡名，如 `vnet0`。
+    pub target: String,
+    /// `network` / `bridge` / `user`。
+    #[serde(default)]
+    pub kind: String,
+    /// 网络名或桥名。
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub mac: String,
+    /// DHCP 租约里的地址；没有租约时为空，界面写「无租约」。
+    #[serde(default)]
+    pub ip: String,
+    #[serde(default)]
+    pub rx_bytes: u64,
+    #[serde(default)]
+    pub tx_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct VmDetail {
+    pub item: VmItem,
+    /// `dumpxml` 的 `<type machine='...'>`；取不到为空。
+    #[serde(default)]
+    pub machine: String,
+    /// `UEFI` / `BIOS`；取不到为空。
+    #[serde(default)]
+    pub firmware: String,
+    /// `virsh domdisplay` 的输出（`vnc://127.0.0.1:5901`）；本期只展示不连接。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+}
+
+/// 生命周期动作白名单。**枚举而不是任意字符串**：命令只认这几个词。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VmAction {
+    Start,
+    Shutdown,
+    Reboot,
+    Suspend,
+    Resume,
+    /// libvirt 的 `destroy`：拔电源。界面上叫「强制断电」，必须二次确认。
+    Destroy,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct VmActionResult {
+    pub ok: bool,
+    #[serde(default)]
+    pub message: String,
+    /// 动作执行后回读的 `virsh domstate`；不拿退出码当成功依据。
+    #[serde(default)]
+    pub state: String,
 }
 
 // ─────────────────────── 配置导入导出 ───────────────────────

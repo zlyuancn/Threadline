@@ -41,6 +41,10 @@ import type {
   ShutdownAccepted,
   TunnelList,
   TunnelView,
+  VmAction,
+  VmActionResult,
+  VmDetail,
+  VmList,
   WhoamiResponse,
 } from './types';
 
@@ -142,6 +146,50 @@ export const adminApi = {
     );
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     url.searchParams.set('mode', mode);
+    url.searchParams.set('cols', String(cols));
+    url.searchParams.set('rows', String(rows));
+    if (token) url.searchParams.set('token', token);
+    return new WebSocket(url.toString());
+  },
+
+  // ── 虚拟机管理 ────────────────────────────────────────────
+  // 与容器同一套骨架：列表一条、详情一条、动作与自启各一条。
+  // 资源（CPU% / 网速）不在核心算——`cpu.time` 与 `net.N.*.bytes` 都是累计值，
+  // 前端用两次采样自己差分，列表 4 秒一档就够。
+
+  vms: (id: string) => http.getSlow<VmList>(`/servers/${id}/admin/vms`),
+
+  vmDetail: (id: string, name: string) =>
+    http.getSlow<VmDetail>(`/servers/${id}/admin/vms/${encodeURIComponent(name)}`),
+
+  vmAction: (id: string, name: string, action: VmAction) =>
+    http.post<VmActionResult>(`/servers/${id}/admin/vms/${encodeURIComponent(name)}/action`, {
+      action,
+    }),
+
+  vmAutostart: (id: string, name: string, enabled: boolean) =>
+    http.post<VmActionResult>(`/servers/${id}/admin/vms/${encodeURIComponent(name)}/autostart`, {
+      enabled,
+    }),
+
+  /**
+   * 串口控制台：一条 WebSocket，服务端跑 `virsh console`。
+   *
+   * 不走 `mode` 参数——串口只有一种，VNC 不在本期。
+   */
+  openVmConsole: async (
+    id: string,
+    name: string,
+    cols: number,
+    rows: number,
+  ): Promise<WebSocket> => {
+    await refreshBootstrap();
+    const { baseUrl, token } = bootstrap();
+    const origin = baseUrl || window.location.origin;
+    const url = new URL(
+      `${origin}/api/v1/servers/${encodeURIComponent(id)}/admin/vms/${encodeURIComponent(name)}/console`,
+    );
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     url.searchParams.set('cols', String(cols));
     url.searchParams.set('rows', String(rows));
     if (token) url.searchParams.set('token', token);

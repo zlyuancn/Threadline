@@ -13,14 +13,15 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use tl_protocol::{
     ContainerAction, ContainerActionResult, ContainerDetail, ContainerList, ContainerLogs,
-    ContainerStats, ServerOverview,
+    ContainerStats, ServerOverview, VmAction, VmActionResult, VmDetail, VmList,
 };
 
 use crate::business::tunnel_runner::TunnelRunner;
 use crate::foundation::clock;
 use crate::models::server::ServerStore;
 use crate::models::server_admin::{
-    self, ConsoleMode, Probe, ACTION_BUDGET, EXEC_BUDGET, STATS_BUDGET,
+    self, ConsoleMode, Probe, ACTION_BUDGET, EXEC_BUDGET, STATS_BUDGET, VM_ACTION_BUDGET,
+    VM_DETAIL_BUDGET, VM_LIST_BUDGET,
 };
 use crate::models::tunnel::engine;
 use crate::models::tunnel::engine::SessionHandle;
@@ -91,7 +92,8 @@ pub async fn overview(
         disk_io: parsed.disk_io,
         processes: parsed.processes,
         containers: parsed.containers.clone(),
-        modules: server_admin::modules(&parsed.containers),
+        vms: parsed.vms.clone(),
+        modules: server_admin::modules(&parsed.containers, &parsed.vms),
         degraded: parsed.degraded,
     };
 
@@ -104,6 +106,7 @@ pub async fn overview(
             overview.zfs_pools = Vec::new();
             overview.processes = Vec::new();
             overview.containers = Default::default();
+            overview.vms = Default::default();
             overview.modules = Vec::new();
             overview.degraded = Vec::new();
         }
@@ -119,6 +122,7 @@ pub async fn overview(
             overview.network = Vec::new();
             overview.processes = Vec::new();
             overview.containers = Default::default();
+            overview.vms = Default::default();
             overview.modules = Vec::new();
             overview.degraded = Vec::new();
         }
@@ -132,6 +136,7 @@ pub async fn overview(
             overview.disk_io = Vec::new();
             overview.processes = Vec::new();
             overview.containers = Default::default();
+            overview.vms = Default::default();
             overview.modules = Vec::new();
             overview.degraded = Vec::new();
         }
@@ -159,8 +164,8 @@ async fn admin_session(
         .map_err(|e| anyhow!(e.to_string()))
 }
 
-/// 在会话上跑一段脚本。
-async fn container_exec(
+/// 在会话上跑一段脚本（容器与虚拟机共用）。
+async fn exec_script(
     session: &SessionHandle,
     script: String,
     budget: Duration,
@@ -195,7 +200,7 @@ pub async fn containers(
 ) -> Result<ContainerList> {
     let started = Instant::now();
     let session = admin_session(servers, runner, server_id).await?;
-    let capture = container_exec(&session, server_admin::list_script(), EXEC_BUDGET).await?;
+    let capture = exec_script(&session, server_admin::list_script(), EXEC_BUDGET).await?;
 
     let mut list = server_admin::parse_list(&capture.stdout);
     // `ps` 给不了容器 IP 与卷，inspect 那一段补上；拿不到就只是少两列，不算失败。
@@ -212,7 +217,7 @@ pub async fn container_stats(
     server_id: &str,
 ) -> Result<Vec<ContainerStats>> {
     let session = admin_session(servers, runner, server_id).await?;
-    let capture = container_exec(&session, server_admin::stats_script(), STATS_BUDGET).await?;
+    let capture = exec_script(&session, server_admin::stats_script(), STATS_BUDGET).await?;
     Ok(server_admin::parse_stats(&capture.stdout))
 }
 
@@ -227,7 +232,7 @@ pub async fn container_detail(
 
     let session = admin_session(servers, runner, server_id).await?;
     let script = server_admin::detail_script(cid).map_err(|e| anyhow!("{e}"))?;
-    let capture = container_exec(&session, script, EXEC_BUDGET).await?;
+    let capture = exec_script(&session, script, EXEC_BUDGET).await?;
 
     let Some(parts) = server_admin::parse_detail(&capture.stdout) else {
         return Err(anyhow!("容器不存在：{cid}"));
@@ -255,7 +260,7 @@ pub async fn container_logs(
 ) -> Result<ContainerLogs> {
     let session = admin_session(servers, runner, server_id).await?;
     let script = server_admin::logs_script(cid, tail, since).map_err(|e| anyhow!("{e}"))?;
-    let capture = container_exec(&session, script, EXEC_BUDGET).await?;
+    let capture = exec_script(&session, script, EXEC_BUDGET).await?;
     Ok(server_admin::parse_logs(&capture.stdout, tail))
 }
 
@@ -288,7 +293,7 @@ pub async fn container_action(
 
     let session = admin_session(servers, runner, server_id).await?;
     let script = server_admin::action_script(action, &name).map_err(|e| anyhow!("{e}"))?;
-    let capture = container_exec(&session, script, ACTION_BUDGET).await?;
+    let capture = exec_script(&session, script, ACTION_BUDGET).await?;
 
     // 不拿命令退出码当成功依据：脚本里回读了一次 `.State.Status`。
     let state = section_text(&capture.stdout, "c_state").trim().to_string();
@@ -344,7 +349,7 @@ pub async fn container_remove(
     let session = admin_session(servers, runner, server_id).await?;
 
     let script = server_admin::remove_script(&name, force).map_err(|e| anyhow!("{e}"))?;
-    let capture = container_exec(&session, script, ACTION_BUDGET).await?;
+    let capture = exec_script(&session, script, ACTION_BUDGET).await?;
 
     // 脚本里 `2>&1` 把 stderr 合进 stdout，成功时输出是容器名，失败时带 Error。
     let removed = section_text(&capture.stdout, "c_remove");
@@ -356,8 +361,7 @@ pub async fn container_remove(
     let mut image_removed = false;
     if let Some(image) = image {
         // 容器已经没了，这时看到的占用才是真的「别人还在用」。
-        let users =
-            container_exec(&session, server_admin::image_users_script(), EXEC_BUDGET).await?;
+        let users = exec_script(&session, server_admin::image_users_script(), EXEC_BUDGET).await?;
         let shared_with = server_admin::parse_image_users(&users.stdout, &image);
 
         if !shared_with.is_empty() {
@@ -368,7 +372,7 @@ pub async fn container_remove(
             ));
         } else {
             let rmi_script = server_admin::rmi_script(&image).map_err(|e| anyhow!("{e}"))?;
-            let rmi = container_exec(&session, rmi_script, ACTION_BUDGET).await?;
+            let rmi = exec_script(&session, rmi_script, ACTION_BUDGET).await?;
             let text = section_text(&rmi.stdout, "c_rmi");
             let lower = text.to_lowercase();
             if lower.contains("no such image") {
@@ -456,6 +460,230 @@ pub async fn container_console(
     let guard = ConsoleGuard { key };
 
     let command = server_admin::console_command(mode, &name).map_err(|e| anyhow!("{e}"))?;
+    let session = admin_session(servers, runner, server_id).await?;
+    let pty = engine::open_pty(&session, &command, cols, rows)
+        .await
+        .map_err(|e| anyhow!("{e}"))?;
+
+    Ok((pty, command, guard))
+}
+
+// ─────────────────────── 虚拟机管理 ───────────────────────
+
+/// 动作名给人看。
+fn vm_label(action: VmAction) -> &'static str {
+    match action {
+        VmAction::Start => "开机",
+        VmAction::Shutdown => "关机",
+        VmAction::Reboot => "重启",
+        VmAction::Suspend => "暂停",
+        VmAction::Resume => "继续",
+        VmAction::Destroy => "强制断电",
+    }
+}
+
+/// 动作成功后的一句话。关机 / 重启都是**异步**的：请求发出去了，客户机还没答应，
+/// 所以这里只承诺"已发送"，状态回读由 `state` 字段照实给。
+fn vm_done_message(action: VmAction) -> &'static str {
+    match action {
+        VmAction::Start => "已发送开机指令",
+        VmAction::Shutdown => "已发送关机请求，等待客户机响应",
+        VmAction::Reboot => "已发送重启请求，等待客户机响应",
+        VmAction::Suspend => "已暂停",
+        VmAction::Resume => "已继续",
+        VmAction::Destroy => "已强制断电",
+    }
+}
+
+/// 虚拟机列表：一次 exec 拿版本、状态表、全部域的 `domstats`，再逐域补 `dominfo`/网卡/IP。
+pub async fn vms(
+    servers: &ServerStore,
+    runner: &Arc<TunnelRunner>,
+    server_id: &str,
+) -> Result<VmList> {
+    let started = Instant::now();
+    let session = admin_session(servers, runner, server_id).await?;
+    let capture = exec_script(&session, server_admin::vm_list_script(), VM_LIST_BUDGET).await?;
+
+    let mut list = server_admin::vm_parse_list(&capture.stdout);
+
+    // 有 virsh 却一条也没列出来：多半是连不上 libvirt（没权限 / 守护进程没起）。
+    // `virsh list` 的报错被 `2>&1` 收进 stdout 了，所以只能看文本。
+    if list.engine.is_some() && list.items.is_empty() {
+        let text = capture.stdout.to_lowercase();
+        if text.contains("failed to connect")
+            || text.contains("permission denied")
+            || text.contains("not authorized")
+        {
+            let line = capture
+                .stdout
+                .lines()
+                .find(|l| {
+                    let l = l.to_lowercase();
+                    l.contains("error") || l.contains("permission") || l.contains("connect")
+                })
+                .map(str::trim)
+                .unwrap_or("未知错误");
+            return Err(anyhow!(
+                "无法连接 libvirt：{line}。请确认当前用户在 libvirt 组里（newgrp libvirt 后重连）"
+            ));
+        }
+    }
+
+    list.collected_at = clock::now_iso8601();
+    list.elapsed_ms = started.elapsed().as_millis() as u64;
+    Ok(list)
+}
+
+/// 单台详情（抽屉打开时）。只读，白名单够用；不必为了看一眼详情再跑一次列表。
+pub async fn vm_detail(
+    servers: &ServerStore,
+    runner: &Arc<TunnelRunner>,
+    server_id: &str,
+    name: &str,
+) -> Result<VmDetail> {
+    server_admin::vm_validate_name(name).map_err(|e| anyhow!("{e}"))?;
+    let session = admin_session(servers, runner, server_id).await?;
+    let script = server_admin::vm_detail_script(name).map_err(|e| anyhow!("{e}"))?;
+    let capture = exec_script(&session, script, VM_DETAIL_BUDGET).await?;
+    server_admin::vm_parse_detail(&capture.stdout).map_err(|e| anyhow!("{e}"))
+}
+
+/// 生命周期动作。写操作走**清单 + 状态**两道校验，菜单不是安全边界。
+pub async fn vm_action(
+    servers: &ServerStore,
+    runner: &Arc<TunnelRunner>,
+    server_id: &str,
+    name: &str,
+    action: VmAction,
+) -> Result<VmActionResult> {
+    let list = vms(servers, runner, server_id).await?;
+    let names: Vec<String> = list.items.iter().map(|i| i.name.clone()).collect();
+    let name = server_admin::vm_resolve_name(name, &names).map_err(|e| anyhow!("{e}"))?;
+    let item = list
+        .items
+        .iter()
+        .find(|i| i.name == name)
+        .ok_or_else(|| anyhow!("没有这台虚拟机：{name}"))?;
+
+    if !server_admin::vm_allowed_actions(&item.state).contains(&action) {
+        return Err(anyhow!(
+            "虚拟机当前状态（{}）不允许{}",
+            item.state,
+            vm_label(action)
+        ));
+    }
+
+    let session = admin_session(servers, runner, server_id).await?;
+    let script = server_admin::vm_action_script(action, &name).map_err(|e| anyhow!("{e}"))?;
+    let capture = exec_script(&session, script, VM_ACTION_BUDGET).await?;
+
+    // 不拿退出码当成功依据：脚本里回读了一次 `virsh domstate`。
+    let (message, state) = server_admin::vm_parse_action(&capture.stdout);
+    if state.is_empty() {
+        let detail = if message.is_empty() {
+            first_line(&capture.stderr)
+        } else {
+            message
+        };
+        return Err(anyhow!("{}失败：{detail}", vm_label(action)));
+    }
+
+    Ok(VmActionResult {
+        ok: true,
+        message: vm_done_message(action).to_string(),
+        state,
+    })
+}
+
+/// 开机自启开关：不是状态迁移，单独一条接口。
+pub async fn vm_autostart(
+    servers: &ServerStore,
+    runner: &Arc<TunnelRunner>,
+    server_id: &str,
+    name: &str,
+    enabled: bool,
+) -> Result<VmActionResult> {
+    let list = vms(servers, runner, server_id).await?;
+    let names: Vec<String> = list.items.iter().map(|i| i.name.clone()).collect();
+    let name = server_admin::vm_resolve_name(name, &names).map_err(|e| anyhow!("{e}"))?;
+    let item = list
+        .items
+        .iter()
+        .find(|i| i.name == name)
+        .ok_or_else(|| anyhow!("没有这台虚拟机：{name}"))?;
+
+    let session = admin_session(servers, runner, server_id).await?;
+    let script = server_admin::vm_autostart_script(&name, enabled).map_err(|e| anyhow!("{e}"))?;
+    let capture = exec_script(&session, script, VM_ACTION_BUDGET).await?;
+
+    let (ok, message, effective) = server_admin::vm_parse_autostart(&capture.stdout);
+    if !ok {
+        let detail = if message.is_empty() {
+            first_line(&capture.stderr)
+        } else {
+            message
+        };
+        return Err(anyhow!("设置开机自启失败：{detail}"));
+    }
+    if effective != enabled {
+        return Err(anyhow!(
+            "设置开机自启没有生效（当前仍是{}）",
+            if effective { "开启" } else { "关闭" }
+        ));
+    }
+
+    Ok(VmActionResult {
+        ok: true,
+        message: if enabled {
+            "已开启开机自启".to_string()
+        } else {
+            "已关闭开机自启".to_string()
+        },
+        state: item.state.clone(),
+    })
+}
+
+/// 串口控制台。
+///
+/// 与容器控制台同一张占用表，但键加了 `vm:` 前缀——同名容器与虚拟机不该互相挤掉。
+pub async fn vm_console(
+    servers: &ServerStore,
+    runner: &Arc<TunnelRunner>,
+    server_id: &str,
+    name: &str,
+    cols: u32,
+    rows: u32,
+) -> Result<(engine::PtyChannel, String, ConsoleGuard)> {
+    let list = vms(servers, runner, server_id).await?;
+    let names: Vec<String> = list.items.iter().map(|i| i.name.clone()).collect();
+    let name = server_admin::vm_resolve_name(name, &names).map_err(|e| anyhow!("{e}"))?;
+    let item = list
+        .items
+        .iter()
+        .find(|i| i.name == name)
+        .ok_or_else(|| anyhow!("没有这台虚拟机：{name}"))?;
+
+    // 暂停的域 qemu 被冻住，`virsh console` 连上去没有任何输出，不给这个入口。
+    if item.state != "running" {
+        return Err(anyhow!(
+            "虚拟机当前状态是 {}，只有运行中的虚拟机有串口输出",
+            item.state
+        ));
+    }
+
+    let key = format!("{server_id}:vm:{name}");
+    {
+        let mut set = console_registry()
+            .lock()
+            .map_err(|_| anyhow!("控制台注册表不可用"))?;
+        if !set.insert(key.clone()) {
+            return Err(anyhow!("这台虚拟机已经有一条控制台会话了"));
+        }
+    }
+    let guard = ConsoleGuard { key };
+
+    let command = server_admin::vm_console_command(&name).map_err(|e| anyhow!("{e}"))?;
     let session = admin_session(servers, runner, server_id).await?;
     let pty = engine::open_pty(&session, &command, cols, rows)
         .await

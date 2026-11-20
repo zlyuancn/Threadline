@@ -216,6 +216,50 @@ impl Services {
         .await
     }
 
+    // ── 虚拟机管理 ────────────────────────────────────────────
+    // 与容器同一套骨架：只读的走列表 / 详情，写操作在业务层再判一次清单与状态。
+
+    pub async fn vms(&self, server_id: &str) -> Result<tl_protocol::VmList> {
+        admin::vms(&self.servers, &self.runner, server_id).await
+    }
+
+    pub async fn vm_detail(&self, server_id: &str, name: &str) -> Result<tl_protocol::VmDetail> {
+        admin::vm_detail(&self.servers, &self.runner, server_id, name).await
+    }
+
+    pub async fn vm_action(
+        &self,
+        server_id: &str,
+        name: &str,
+        action: tl_protocol::VmAction,
+    ) -> Result<tl_protocol::VmActionResult> {
+        admin::vm_action(&self.servers, &self.runner, server_id, name, action).await
+    }
+
+    pub async fn vm_autostart(
+        &self,
+        server_id: &str,
+        name: &str,
+        enabled: bool,
+    ) -> Result<tl_protocol::VmActionResult> {
+        admin::vm_autostart(&self.servers, &self.runner, server_id, name, enabled).await
+    }
+
+    /// 串口控制台：PTY 通道 + 实际执行的命令 + 占用凭据。
+    pub async fn vm_console(
+        &self,
+        server_id: &str,
+        name: &str,
+        cols: u32,
+        rows: u32,
+    ) -> Result<(
+        crate::models::tunnel::engine::PtyChannel,
+        String,
+        admin::ConsoleGuard,
+    )> {
+        admin::vm_console(&self.servers, &self.runner, server_id, name, cols, rows).await
+    }
+
     /// 开一条服务器登录 shell：返回 PTY 通道与实际执行的命令。
     ///
     /// 不做互斥：SSH shell 各自独立 PTY，两条会话不会串输入。

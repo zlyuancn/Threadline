@@ -1,7 +1,7 @@
 //! 服务器管理（只读）。
 //!
 //! 归属：**模型层**。拥有：管理模块清单、远端只读采集脚本、输出解析与指标口径。
-//! 提供：`overview_script()` / `interpret(raw)` / `modules(&ContainerSummary)`。
+//! 提供：`overview_script()` / `interpret(raw)` / `modules(&ContainerSummary, &VmSummary)`。
 //! 允许调用：`tl_protocol`（DTO）、标准库。
 //!
 //! 纪律：
@@ -16,8 +16,9 @@ pub mod containers;
 pub mod parse;
 pub mod shell;
 pub mod terminal;
+pub mod vms;
 
-use tl_protocol::{AdminModule, AdminModuleState, ContainerSummary};
+use tl_protocol::{AdminModule, AdminModuleState, ContainerSummary, VmSummary};
 
 pub use collect::{Probe, EXEC_BUDGET};
 pub use containers::{
@@ -28,6 +29,17 @@ pub use containers::{
 };
 pub use parse::{interpret, interpret_with, split_sections, Extras, ParsedOverview};
 pub use terminal::login_shell_command;
+// 虚拟机与容器同名函数不少（`action_script` / `allowed_actions` / `console_command`），
+// 这里带 `vm_` 前缀导出，业务层按名字就能分清是哪一套。
+pub use vms::{
+    action_script as vm_action_script, allowed_actions as vm_allowed_actions,
+    autostart_script as vm_autostart_script, console_command as vm_console_command,
+    detail_script as vm_detail_script, list_script as vm_list_script,
+    parse_action as vm_parse_action, parse_autostart as vm_parse_autostart,
+    parse_detail as vm_parse_detail, parse_list as vm_parse_list, resolve_name as vm_resolve_name,
+    validate_name as vm_validate_name, ACTION_BUDGET as VM_ACTION_BUDGET,
+    DETAIL_BUDGET as VM_DETAIL_BUDGET, LIST_BUDGET as VM_LIST_BUDGET,
+};
 
 /// 概览采集脚本（一次往返）。
 ///
@@ -40,8 +52,8 @@ pub fn overview_script(probe: Probe) -> String {
 /// 管理页导航清单。
 ///
 /// 清单由核心给：新增模块时只改这里 + 前端加一个组件，界面结构不用动。
-/// `containers` 用来把"这台机器没有容器引擎"变成 `Unavailable` 而不是空白页。
-pub fn modules(containers: &ContainerSummary) -> Vec<AdminModule> {
+/// `containers` / `vms` 用来把"这台机器没有引擎"变成 `Unavailable` 而不是空白页。
+pub fn modules(containers: &ContainerSummary, vms: &VmSummary) -> Vec<AdminModule> {
     let module = |id: &str, title: &str, state: AdminModuleState, note: &str| AdminModule {
         id: id.to_string(),
         title: title.to_string(),
@@ -85,12 +97,21 @@ pub fn modules(containers: &ContainerSummary) -> Vec<AdminModule> {
                 "未检测到 docker"
             },
         ),
-        // 虚拟机：位置留好，核心尚未实现（P4），侧边栏紧跟在容器下面。
+        // 虚拟机：装了 libvirt 就是 Ready；没装是 Unavailable（不是"规划中"）。
+        // 探测只看 `virsh --version`，"装了但当前用户没权限"留给面板的错误横幅。
         module(
             "vms",
             "虚拟机",
-            AdminModuleState::Planned,
-            "virsh 列表、启停与串口控制台（后续开发）",
+            if vms.version.is_some() {
+                AdminModuleState::Ready
+            } else {
+                AdminModuleState::Unavailable
+            },
+            if vms.version.is_some() {
+                "libvirt 虚拟机列表、生命周期与串口控制台"
+            } else {
+                "未检测到 libvirt（virsh）"
+            },
         ),
         module(
             "processes",
@@ -131,7 +152,7 @@ mod tests {
 
     #[test]
     fn overview_is_always_ready() {
-        let modules = modules(&ContainerSummary::default());
+        let modules = modules(&ContainerSummary::default(), &VmSummary::default());
         let overview = modules
             .iter()
             .find(|m| m.id == "overview")
@@ -141,7 +162,7 @@ mod tests {
 
     #[test]
     fn containers_without_engine_are_flagged_unavailable() {
-        let modules = modules(&ContainerSummary::default());
+        let modules = modules(&ContainerSummary::default(), &VmSummary::default());
         let containers = modules
             .iter()
             .find(|m| m.id == "containers")
@@ -156,7 +177,7 @@ mod tests {
             engine: Some("docker".to_string()),
             ..Default::default()
         };
-        let modules = modules(&summary);
+        let modules = modules(&summary, &VmSummary::default());
         let containers = modules
             .iter()
             .find(|m| m.id == "containers")
@@ -165,14 +186,25 @@ mod tests {
     }
 
     #[test]
-    fn vms_are_planned_and_follow_containers() {
-        let summary = ContainerSummary {
+    fn vms_without_libvirt_are_unavailable() {
+        let modules = modules(&ContainerSummary::default(), &VmSummary::default());
+        let vms = modules.iter().find(|m| m.id == "vms").expect("vms");
+        assert_eq!(vms.state, AdminModuleState::Unavailable);
+        assert!(vms.note.as_deref().unwrap_or("").contains("libvirt"));
+    }
+
+    #[test]
+    fn vms_with_libvirt_are_ready_and_follow_containers() {
+        let containers = ContainerSummary {
             engine: Some("docker".to_string()),
             ..Default::default()
         };
-        let modules = modules(&summary);
+        let vms = VmSummary {
+            version: Some("10.0.0".to_string()),
+        };
+        let modules = modules(&containers, &vms);
         let at = |id: &str| modules.iter().position(|m| m.id == id).expect(id);
-        assert_eq!(modules[at("vms")].state, AdminModuleState::Planned);
+        assert_eq!(modules[at("vms")].state, AdminModuleState::Ready);
         // 侧边栏顺序：虚拟机紧跟在容器管理后面
         assert_eq!(at("vms"), at("containers") + 1);
     }
@@ -183,7 +215,7 @@ mod tests {
     /// 清单由核心给、前端只按序渲染，所以这条断言就是"侧边栏长什么样"的唯一防线。
     #[test]
     fn module_order_matches_the_agreed_navigation() {
-        let modules = modules(&ContainerSummary::default());
+        let modules = modules(&ContainerSummary::default(), &VmSummary::default());
         let ids: Vec<&str> = modules.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(
             ids,
@@ -204,7 +236,7 @@ mod tests {
 
     #[test]
     fn planned_modules_still_carry_a_note() {
-        let modules = modules(&ContainerSummary::default());
+        let modules = modules(&ContainerSummary::default(), &VmSummary::default());
         for m in modules
             .iter()
             .filter(|m| m.state != AdminModuleState::Ready)
